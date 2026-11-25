@@ -13,10 +13,21 @@ import android.os.Parcelable;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public class ReplyListener extends NotificationListenerService {
     private static final String WHATSAPP="com.whatsapp";
     private static final Object LOCK=new Object();
+    private static final Map<String,PendingIntent> OPEN_ACTIONS=new LinkedHashMap<String,PendingIntent>(32,0.75f,true){
+        @Override protected boolean removeEldestEntry(Map.Entry<String,PendingIntent> e){return size()>100;}
+    };
+    static boolean openConversation(String key){
+        PendingIntent action;
+        synchronized(OPEN_ACTIONS){action=OPEN_ACTIONS.get(key);}
+        if(action==null || !WHATSAPP.equals(action.getCreatorPackage()))return false;
+        try{action.send();return true;}catch(PendingIntent.CanceledException | SecurityException e){return false;}
+    }
     private long connectedAt=0;
     @Override public void onListenerConnected() {
         super.onListenerConnected(); connectedAt=System.currentTimeMillis();
@@ -35,7 +46,7 @@ public class ReplyListener extends NotificationListenerService {
     private static String str(CharSequence s) { return s==null?"":s.toString().trim(); }
     private void process(StatusBarNotification sbn) {
         SharedPreferences p=Store.prefs(this);
-        if(!p.getBoolean("consent_v1",false) || !p.getBoolean("enabled",false) || connectedAt==0) return;
+        if(!p.getBoolean("consent_v2",false) || !p.getBoolean("enabled",false) || connectedAt==0) return;
         long now=System.currentTimeMillis();
         if(sbn.getPostTime()<connectedAt || now-sbn.getPostTime()>120000L) return;
         Notification n=sbn.getNotification();
@@ -89,12 +100,16 @@ public class ReplyListener extends NotificationListenerService {
         Intent fill=new Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         Bundle data=new Bundle(); data.putCharSequence(input.getResultKey(),reply);
         RemoteInput.addResultsToIntent(new RemoteInput[]{input},fill,data);
-        if(!p.getBoolean("consent_v1",false) || !p.getBoolean("enabled",false)) return;
+        if(!p.getBoolean("consent_v2",false) || !p.getBoolean("enabled",false)) return;
         if(!Store.write(this,key,new RuleEngine.State(Store.day(now),stage,event,now))) { Store.status(this,"Não foi possível gravar o controle de respostas."); return; }
         try {
             action.actionIntent.send(this,0,fill);
         } catch(PendingIntent.CanceledException | SecurityException e) {
             Store.write(this,key,previous); Store.status(this,"Resposta recusada pelo Android: "+e.getClass().getSimpleName()); return;
+        }
+        if(n.contentIntent!=null && WHATSAPP.equals(n.contentIntent.getCreatorPackage()))synchronized(OPEN_ACTIONS){OPEN_ACTIONS.put(key,n.contentIntent);}
+        if(!Attendance.record(this,key,title,body,reply,stage,now)){
+            Store.status(this,"Resposta encaminhada, mas não foi possível gravar a central.");return;
         }
         Store.status(this,stage==RuleEngine.FIRST?"Saudação encaminhada ao WhatsApp.":"Segunda resposta encaminhada ao WhatsApp.");
     }
