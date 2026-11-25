@@ -1,0 +1,26 @@
+package com.alineoff.app;
+public class RuleEngineTest {
+    static int count;
+    static void eq(String name,int expected,int actual){count++;if(expected!=actual)throw new AssertionError(name+": "+actual+" != "+expected);System.out.println("PASS "+name);}
+    static int d(RuleEngine.State s,String day,String event,long incoming,long now,boolean enabled,boolean second){return RuleEngine.decide(s,day,event,incoming,now,enabled,second,true,true);}
+    public static void main(String[] args){
+        String day="2026-11-25", next="2026-11-26";long t=1000000;
+        RuleEngine.State first=new RuleEngine.State(day,1,"a",t);
+        RuleEngine.State second=new RuleEngine.State(day,2,"b",t+5000);
+        eq("first incoming",1,d(null,day,"a",t-10,t,true,true));
+        eq("duplicate callback",0,d(first,day,"a",t+100,t+200,true,true));
+        eq("old incoming cannot trigger second",0,d(first,day,"b",t-10,t+200,true,true));
+        eq("second incoming",2,d(first,day,"b",t+100,t+200,true,true));
+        eq("third incoming",0,d(second,day,"c",t+6000,t+7000,true,true));
+        eq("different contact",1,d(null,day,"z",t+100,t+200,true,true));
+        eq("disabled",0,d(null,day,"a",t,t,false,true));
+        eq("second disabled",0,d(first,day,"b",t+100,t+200,true,false));
+        eq("next day resets",1,d(second,next,"new",t+86400000,t+86400001,true,true));
+        eq("old duplicate next day",0,d(second,next,"b",t+86400000,t+86400001,true,true));
+        eq("stale notification",0,d(null,day,"a",t-120001,t,true,true));
+        eq("invalid future timestamp",0,d(null,day,"a",t+60001,t,true,true));
+        eq("empty greeting",0,RuleEngine.decide(null,day,"a",t,t,true,true,false,true));
+        eq("empty second",0,RuleEngine.decide(first,day,"b",t+100,t+200,true,true,true,false));
+        System.out.println(count+" tests passed");
+    }
+}
