@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
             root.setPadding(dp(20)+insets.getSystemWindowInsetLeft(),dp(20)+insets.getSystemWindowInsetTop(),dp(20)+insets.getSystemWindowInsetRight(),dp(24)+insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         }); scroll.requestApplyInsets();
-        TextView brand=text("ALINE OFF  /  1.2",12,GREEN,true); root.addView(brand);
+        TextView brand=text("ALINE OFF  /  1.3",12,GREEN,true); root.addView(brand);
         ImageView mascot=new ImageView(this); mascot.setImageResource(R.drawable.logo); mascot.setContentDescription("Mascote pitbull do Aline off"); root.addView(mascot,new LinearLayout.LayoutParams(dp(76),dp(76)));
         root.addView(text("Seu WhatsApp,\nsempre atendido.",29,INK,true));
         root.addView(text("Respostas automáticas • WhatsApp Messenger",14,MUTED,false));
@@ -59,14 +59,14 @@ public class MainActivity extends Activity {
             p.edit().putBoolean("enabled",on).apply(); refresh();
         });
         rules.addView(text("Mensagem 1 · boas-vindas",15,INK,true));
-        rules.addView(text("Uma vez por conversa a cada dia.",13,MUTED,false));
+        rules.addView(text("Uma vez por conversa a cada dia, após 5 segundos.",13,MUTED,false));
         first=editor(p.getString("first",Store.DEFAULT_FIRST)); rules.addView(first);
         secondEnabled=new Switch(this); secondEnabled.setText("Usar segunda mensagem"); secondEnabled.setTextColor(INK); secondEnabled.setChecked(p.getBoolean("second_enabled",true)); rules.addView(secondEnabled);
-        rules.addView(text("Mensagem 2 · após uma nova mensagem",15,INK,true));
+        rules.addView(text("Mensagem 2 · 5 segundos após nova mensagem",15,INK,true));
         second=editor(p.getString("second",Store.DEFAULT_SECOND)); second.setEnabled(secondEnabled.isChecked()); rules.addView(second);
         secondEnabled.setOnCheckedChangeListener((v,on)->second.setEnabled(on));
         rules.addView(button("Salvar mensagens",this::save,true));
-        rules.addView(text("Depois da segunda resposta, não envia mais nada para a conversa até o dia seguinte. Grupos não são atendidos quando identificados.",13,MUTED,false));
+        rules.addView(text("Cada resposta aguarda 5 segundos. Se chegar outra mensagem durante a espera, o prazo reinicia para a última. A resposta é cancelada se a notificação deixar de existir. Depois da segunda resposta, não envia mais nada para a conversa até o dia seguinte. Grupos não são atendidos quando identificados.",13,MUTED,false));
         LinearLayout diag=panel(root); diag.addView(text("03   Diagnóstico",18,INK,true));
         diagnostics=text("",14,MUTED,false); diag.addView(diagnostics);
         diag.addView(button("Atualizar status",this::refresh,false));

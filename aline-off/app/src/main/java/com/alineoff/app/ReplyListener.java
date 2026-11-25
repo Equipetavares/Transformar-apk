@@ -10,6 +10,10 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcelable;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import java.util.Locale;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import java.util.List;
@@ -28,23 +32,45 @@ public class ReplyListener extends NotificationListenerService {
         if(action==null || !WHATSAPP.equals(action.getCreatorPackage()))return false;
         try{action.send();return true;}catch(PendingIntent.CanceledException | SecurityException e){return false;}
     }
+    private final Handler handler=new Handler(Looper.getMainLooper());
+    private final DelayQueue queue=new DelayQueue();
     private long connectedAt=0;
+    private void cancelPending(){queue.clear();handler.removeCallbacksAndMessages(null);}
+    @Override public void onDestroy(){synchronized(LOCK){connectedAt=0;cancelPending();}super.onDestroy();}
+    @Override public void onNotificationRemoved(StatusBarNotification sbn){
+        if(sbn!=null && WHATSAPP.equals(sbn.getPackageName()))synchronized(LOCK){queue.cancelNotification(sbn.getKey());}
+    }
+    private void dispatchDelayed(DelayQueue.Ticket ticket){
+        synchronized(LOCK){
+            if(!queue.claim(ticket,SystemClock.uptimeMillis()))return;
+            try{
+                if(connectedAt==0)return;
+                StatusBarNotification[] active=getActiveNotifications(new String[]{ticket.notification});
+                if(active!=null)for(StatusBarNotification current:active){
+                    if(current!=null && WHATSAPP.equals(current.getPackageName()) && ticket.notification.equals(current.getKey())){
+                        process(current,ticket);return;
+                    }
+                }
+                Store.status(this,"Resposta cancelada: a notificação não está mais ativa.");
+            }catch(RuntimeException ex){Store.status(this,"Falha ao validar resposta: "+ex.getClass().getSimpleName());}
+        }
+    }
     @Override public void onListenerConnected() {
-        super.onListenerConnected(); connectedAt=System.currentTimeMillis();
+        super.onListenerConnected(); synchronized(LOCK){cancelPending();connectedAt=System.currentTimeMillis();}
         Store.cleanup(this,connectedAt); Store.status(this,"Acesso conectado. Aguardando novas mensagens.");
     }
     @Override public void onListenerDisconnected() {
-        super.onListenerDisconnected(); connectedAt=0; Store.status(this,"Acesso desconectado. Confira as permissões.");
+        super.onListenerDisconnected(); synchronized(LOCK){connectedAt=0;cancelPending();} Store.status(this,"Acesso desconectado. Confira as permissões.");
         requestRebind(new ComponentName(this,ReplyListener.class));
     }
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
         if(sbn==null || !WHATSAPP.equals(sbn.getPackageName())) return;
         synchronized(LOCK) {
-            try { process(sbn); } catch(RuntimeException e) { Store.status(this,"Notificação ignorada por incompatibilidade: "+e.getClass().getSimpleName()); }
+            try { process(sbn,null); } catch(RuntimeException e) { Store.status(this,"Notificação ignorada por incompatibilidade: "+e.getClass().getSimpleName()); }
         }
     }
     private static String str(CharSequence s) { return s==null?"":s.toString().trim(); }
-    private void process(StatusBarNotification sbn) {
+    private void process(StatusBarNotification sbn,DelayQueue.Ticket dispatch) {
         SharedPreferences p=Store.prefs(this);
         if(!p.getBoolean("consent_v2",false) || !p.getBoolean("enabled",false) || connectedAt==0) return;
         long now=System.currentTimeMillis();
@@ -52,13 +78,14 @@ public class ReplyListener extends NotificationListenerService {
         Notification n=sbn.getNotification();
         if(n==null || n.extras==null || (n.flags&Notification.FLAG_GROUP_SUMMARY)!=0 || (n.flags&Notification.FLAG_ONGOING_EVENT)!=0) return;
         Bundle x=n.extras;
-        if(n.visibility==Notification.VISIBILITY_SECRET) return;
+        if(n.visibility==Notification.VISIBILITY_SECRET || Notification.CATEGORY_CALL.equals(n.category)) return;
         Store.cleanup(this,now);
         if(x.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION,false) || (!x.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION) && !str(x.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)).isEmpty())) return;
         String first=p.getString("first",Store.DEFAULT_FIRST), second=p.getString("second",Store.DEFAULT_SECOND);
         String title=str(x.getCharSequence(Notification.EXTRA_TITLE));
         String body=str(x.getCharSequence(Notification.EXTRA_TEXT));
         String senderId="";
+        String selfName=str(x.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME));
         long timestamp=0;
         boolean strongMessage=false;
         Parcelable[] raw=x.getParcelableArray(Notification.EXTRA_MESSAGES);
@@ -78,22 +105,33 @@ public class ReplyListener extends NotificationListenerService {
                     senderId=!key.isEmpty()?key:uri;
                 }
             }
-            if(sender.isEmpty()) return;
+            if(sender.isEmpty() || (!selfName.isEmpty() && sender.equalsIgnoreCase(selfName))) return;
             if(title.isEmpty()) title=sender;
             strongMessage=timestamp>0;
         }
-        if(title.isEmpty() || body.isEmpty() || body.equals(first.trim()) || body.equals(second.trim())) return;
-        if(timestamp<=0) timestamp=sbn.getPostTime();
+        if(title.isEmpty() || title.equalsIgnoreCase("WhatsApp") || (!selfName.isEmpty() && title.equalsIgnoreCase(selfName)) || body.isEmpty() || body.equals(first.trim()) || body.equals(second.trim())) return;
+        if(timestamp<=0){timestamp=n.when>0?n.when:sbn.getPostTime();strongMessage=n.when>0;}
         if(!Store.day(timestamp).equals(Store.day(now))) return;
         String shortcut=Build.VERSION.SDK_INT>=26?str(n.getShortcutId()):"";
         String identity=!shortcut.isEmpty()?"shortcut:"+shortcut:!senderId.isEmpty()?"sender:"+senderId:"title:"+title;
         String key=Store.hash(sbn.getUser().toString()+"|"+identity);
         String event=Store.hash(identity+"|"+body+(strongMessage?"|"+timestamp:""));
+        if(dispatch!=null && (!dispatch.contact.equals(key) || !dispatch.event.equals(event))){
+            Store.status(this,"Resposta cancelada: o conteúdo da notificação mudou.");return;
+        }
         RuleEngine.State previous=Store.read(this,key);
         int stage=RuleEngine.decide(previous,Store.day(now),event,timestamp,now,true,p.getBoolean("second_enabled",true),!first.trim().isEmpty(),!second.trim().isEmpty());
         if(stage==RuleEngine.NONE) return;
         Notification.Action action=findReply(n);
         if(action==null) { Store.status(this,"WhatsApp não disponibilizou a ação de resposta rápida."); return; }
+        if(dispatch==null){
+            DelayQueue.Ticket ticket=queue.offer(key,event,sbn.getKey(),SystemClock.uptimeMillis());
+            if(ticket!=null){
+                handler.postAtTime(()->dispatchDelayed(ticket),ticket.due);
+                Store.status(this,"Resposta automática programada para daqui a 5 segundos.");
+            }
+            return;
+        }
         RemoteInput input=null; for(RemoteInput r:action.getRemoteInputs()) if(r.getAllowFreeFormInput()){input=r;break;}
         if(input==null) return;
         String reply=stage==RuleEngine.FIRST?first:second;
@@ -114,19 +152,24 @@ public class ReplyListener extends NotificationListenerService {
         Store.status(this,stage==RuleEngine.FIRST?"Saudação encaminhada ao WhatsApp.":"Segunda resposta encaminhada ao WhatsApp.");
     }
     private Notification.Action findReply(Notification n) {
-        Notification.Action first=null;
-        if(n.actions!=null) for(Notification.Action a:n.actions) {
-            if(!usable(a)) continue;
-            if(Build.VERSION.SDK_INT>=28 && a.getSemanticAction()==Notification.Action.SEMANTIC_ACTION_REPLY) return a;
-            if(first==null) first=a;
+        java.util.ArrayList<Notification.Action> candidates=new java.util.ArrayList<>();
+        if(n.actions!=null)java.util.Collections.addAll(candidates,n.actions);
+        candidates.addAll(new Notification.WearableExtender(n).getActions());
+        Notification.Action best=null;int bestScore=-1;
+        for(Notification.Action a:candidates){
+            if(!usable(a))continue;
+            int score=0;
+            String label=str(a.title).toLowerCase(Locale.ROOT);
+            if(label.contains("reply") || label.contains("responder") || label.contains("répondre") || label.contains("antworten"))score=1;
+            if(Build.VERSION.SDK_INT>=28 && a.getSemanticAction()==Notification.Action.SEMANTIC_ACTION_REPLY)score=2;
+            if(score>bestScore){best=a;bestScore=score;}
         }
-        if(first!=null) return first;
-        List<Notification.Action> wearable=new Notification.WearableExtender(n).getActions();
-        for(Notification.Action a:wearable) if(usable(a)) return a;
-        return null;
+        return best;
     }
     private boolean usable(Notification.Action a) {
         if(a==null || a.actionIntent==null || !WHATSAPP.equals(a.actionIntent.getCreatorPackage()) || a.getRemoteInputs()==null) return false;
+        if(Build.VERSION.SDK_INT>=31 && a.isAuthenticationRequired())return false;
+        if(Build.VERSION.SDK_INT>=31 && a.actionIntent.isImmutable())return false;
         for(RemoteInput r:a.getRemoteInputs()) if(r.getAllowFreeFormInput()) return true;
         return false;
     }
