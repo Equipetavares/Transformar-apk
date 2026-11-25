@@ -35,12 +35,14 @@ public class ReplyListener extends NotificationListenerService {
     private static String str(CharSequence s) { return s==null?"":s.toString().trim(); }
     private void process(StatusBarNotification sbn) {
         SharedPreferences p=Store.prefs(this);
-        if(!p.getBoolean("enabled",false) || connectedAt==0) return;
+        if(!p.getBoolean("consent_v1",false) || !p.getBoolean("enabled",false) || connectedAt==0) return;
         long now=System.currentTimeMillis();
         if(sbn.getPostTime()<connectedAt || now-sbn.getPostTime()>120000L) return;
         Notification n=sbn.getNotification();
         if(n==null || n.extras==null || (n.flags&Notification.FLAG_GROUP_SUMMARY)!=0 || (n.flags&Notification.FLAG_ONGOING_EVENT)!=0) return;
         Bundle x=n.extras;
+        if(n.visibility==Notification.VISIBILITY_SECRET) return;
+        Store.cleanup(this,now);
         if(x.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION,false) || (!x.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION) && !str(x.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)).isEmpty())) return;
         String first=p.getString("first",Store.DEFAULT_FIRST), second=p.getString("second",Store.DEFAULT_SECOND);
         String title=str(x.getCharSequence(Notification.EXTRA_TITLE));
@@ -87,6 +89,7 @@ public class ReplyListener extends NotificationListenerService {
         Intent fill=new Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         Bundle data=new Bundle(); data.putCharSequence(input.getResultKey(),reply);
         RemoteInput.addResultsToIntent(new RemoteInput[]{input},fill,data);
+        if(!p.getBoolean("consent_v1",false) || !p.getBoolean("enabled",false)) return;
         if(!Store.write(this,key,new RuleEngine.State(Store.day(now),stage,event,now))) { Store.status(this,"Não foi possível gravar o controle de respostas."); return; }
         try {
             action.actionIntent.send(this,0,fill);

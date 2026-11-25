@@ -1,4 +1,4 @@
-name: Compilar Aline off (APK de teste)
+name: Compilar Aline off (distribuição oficial)
 on:
   workflow_dispatch:
   push:
@@ -23,18 +23,23 @@ jobs:
           echo "Android SDK: $ANDROID_HOME"
           SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
           test -n "$SDKMANAGER"
-          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
       - run: sh test-rules.sh
-      - run: gradle --no-daemon :app:assembleDebug
+      - run: gradle --no-daemon :app:assembleDebug :app:bundleRelease
       - run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" Aline-off-1.0.0-debug.apk
+          cp "$APK" Aline-off-1.1.0-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Aline-off-APK
-          path: aline-off/Aline-off-1.0.0-debug.apk
+          path: aline-off/Aline-off-1.1.0-debug.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aline-off-AAB-release-unsigned
+          path: aline-off/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error

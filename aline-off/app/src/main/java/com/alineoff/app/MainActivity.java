@@ -1,6 +1,7 @@
 package com.alineoff.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -31,17 +32,18 @@ public class MainActivity extends Activity {
             root.setPadding(dp(20)+insets.getSystemWindowInsetLeft(),dp(20)+insets.getSystemWindowInsetTop(),dp(20)+insets.getSystemWindowInsetRight(),dp(24)+insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         }); scroll.requestApplyInsets();
-        TextView brand=text("ALINE OFF  /  1.0",12,GREEN,true); root.addView(brand);
+        TextView brand=text("ALINE OFF  /  1.1",12,GREEN,true); root.addView(brand);
+        ImageView mascot=new ImageView(this); mascot.setImageResource(R.drawable.logo); mascot.setContentDescription("Mascote pitbull do Aline off"); root.addView(mascot,new LinearLayout.LayoutParams(dp(76),dp(76)));
         root.addView(text("Seu WhatsApp,\nsempre atendido.",29,INK,true));
         root.addView(text("Respostas automáticas • WhatsApp Messenger",14,MUTED,false));
         LinearLayout access=panel(root); access.addView(text("01   Conexão com Android",18,INK,true));
         status=text("",14,MUTED,false); access.addView(status);
-        access.addView(button("Conceder acesso às notificações",()->startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)),false));
-        access.addView(text("O acesso permite ler as notificações. O app processa apenas as do WhatsApp normal, localmente.",13,MUTED,false));
+        access.addView(button("Conceder acesso às notificações",this::requestNotificationConsent,false));
+        access.addView(text("O Android concede acesso amplo às notificações; o Aline off usa apenas as do WhatsApp Messenger para responder no seu aparelho. Nenhuma mensagem é enviada a servidores do Aline off.",13,MUTED,false));
         LinearLayout rules=panel(root); rules.addView(text("02   Suas mensagens",18,INK,true));
-        enabled=new Switch(this); enabled.setText("Ativar respostas automáticas"); enabled.setTextColor(INK); enabled.setChecked(p.getBoolean("enabled",false)); rules.addView(enabled);
+        enabled=new Switch(this); enabled.setText("Ativar respostas automáticas"); enabled.setTextColor(INK); enabled.setChecked(p.getBoolean("enabled",false) && p.getBoolean("consent_v1",false) && hasAccess()); rules.addView(enabled);
         enabled.setOnCheckedChangeListener((v,on)->{
-            if(on && !hasAccess()){v.setChecked(false); Toast.makeText(this,"Conceda acesso às notificações primeiro.",Toast.LENGTH_LONG).show();return;}
+            if(on && (!hasAccess() || !p.getBoolean("consent_v1",false))){v.setChecked(false); Toast.makeText(this,"Conceda acesso às notificações primeiro.",Toast.LENGTH_LONG).show();return;}
             if(on && p.getString("first",Store.DEFAULT_FIRST).trim().isEmpty()){v.setChecked(false);Toast.makeText(this,"Salve uma saudação primeiro.",Toast.LENGTH_SHORT).show();return;}
             p.edit().putBoolean("enabled",on).apply(); refresh();
         });
@@ -58,12 +60,33 @@ public class MainActivity extends Activity {
         diagnostics=text("",14,MUTED,false); diag.addView(diagnostics);
         diag.addView(button("Atualizar status",this::refresh,false));
         diag.addView(button("Configurações de bateria",()->{try{startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));}catch(Exception e){startActivity(new Intent(Settings.ACTION_SETTINGS));}},false));
-        diag.addView(text("Se o acesso estiver bloqueado no Android 13+, abra Informações do app > menu ⋮ > Permitir configurações restritas, se disponível. Teste com outro telefone e deixe as notificações do WhatsApp ativadas.",13,MUTED,false));
+        diag.addView(text("Instale pelo canal autorizado do Google Play. Se o Android não conceder acesso, a automação permanece desligada. Teste com outro telefone e deixe as notificações do WhatsApp ativadas.",13,MUTED,false));
+        LinearLayout privacy=panel(root); privacy.addView(text("04   Privacidade e controle",18,INK,true));
+        privacy.addView(button("Política de privacidade",()->new AlertDialog.Builder(this).setTitle("Privacidade").setMessage(PRIVACY).setPositiveButton("Fechar",null).show(),false));
+        privacy.addView(button("Revogar consentimento e apagar dados",this::revoke,false));
         root.addView(text("Sem conta • sem anúncios • sem servidor",12,MUTED,false));
         refresh();
     }
-    @Override public void onResume(){super.onResume();p.registerOnSharedPreferenceChangeListener(listener);refresh();}
+    @Override public void onResume(){super.onResume();p.registerOnSharedPreferenceChangeListener(listener);if(!hasAccess() || !p.getBoolean("consent_v1",false)){p.edit().putBoolean("enabled",false).apply();enabled.setChecked(false);}refresh();}
     @Override public void onPause(){p.unregisterOnSharedPreferenceChangeListener(listener);super.onPause();}
+    private static final String PRIVACY="O Aline off processa localmente as notificações do WhatsApp Messenger, incluindo o texto e a identificação da conversa, para decidir e enviar as respostas configuradas. O Android pode disponibilizar notificações de outros aplicativos, mas elas são descartadas antes da leitura do conteúdo. Não há acesso à Internet pelo aplicativo, anúncios, SDKs de rastreamento ou transferência de conteúdo a servidores do desenvolvedor. As mensagens configuradas e identificadores derivados, data e etapa das respostas ficam no armazenamento privado do aparelho. O histórico técnico é removido após sete dias nas rotinas de limpeza. A resposta escolhida é encaminhada ao WhatsApp. Você pode desligar a automação ou revogar o consentimento e apagar os dados nesta tela. Também pode revogar a permissão nas configurações do Android. O Aline off não é afiliado à Meta.";
+    private void requestNotificationConsent(){
+        new AlertDialog.Builder(this).setTitle("Permitir respostas automáticas?")
+            .setMessage("O Android pode disponibilizar todas as suas notificações, inclusive dados pessoais. O Aline off ignora outros apps e lê somente notificações do WhatsApp Messenger para enviar as duas respostas que você configurar, mesmo com o aplicativo fechado. Os dados ficam no aparelho. Você pode revogar o acesso a qualquer momento. Deseja continuar?")
+            .setNegativeButton("Agora não",null)
+            .setPositiveButton("Concordo e continuar",(d,w)->{
+                if(p.edit().putBoolean("consent_v1",true).commit()) startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+            }).show();
+    }
+    private void revoke(){
+        new AlertDialog.Builder(this).setTitle("Apagar dados e desligar?")
+            .setMessage("Isso apaga suas mensagens configuradas, o controle diário e os diagnósticos. Revogue também o acesso do Aline off na próxima tela do Android.")
+            .setNegativeButton("Cancelar",null).setPositiveButton("Apagar e revogar",(d,w)->{
+                p.edit().clear().commit(); Store.state(this).edit().clear().commit();
+                enabled.setChecked(false); first.setText(Store.DEFAULT_FIRST); second.setText(Store.DEFAULT_SECOND); secondEnabled.setChecked(true);
+                refresh(); startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+            }).show();
+    }
     private boolean hasAccess(){
         String list=Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");
         if(list==null)return false;
