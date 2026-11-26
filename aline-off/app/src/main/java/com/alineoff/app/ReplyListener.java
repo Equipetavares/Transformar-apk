@@ -2,188 +2,170 @@ package com.alineoff.app;
 
 import android.app.Notification;
 import android.app.PendingIntent;
-import android.app.Person;
-import android.app.RemoteInput;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Parcelable;
-import android.os.Handler;
-import android.os.Looper;
-import android.os.SystemClock;
-import java.util.Locale;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
-import java.util.List;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.Person;
+import androidx.core.app.RemoteInput;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class ReplyListener extends NotificationListenerService {
     private static final String WHATSAPP="com.whatsapp";
     private static final Object LOCK=new Object();
+    private static volatile boolean connected=false;
     private static final Map<String,PendingIntent> OPEN_ACTIONS=new LinkedHashMap<String,PendingIntent>(32,0.75f,true){
         @Override protected boolean removeEldestEntry(Map.Entry<String,PendingIntent> e){return size()>100;}
     };
+    static boolean isConnected(){return connected;}
     static boolean openConversation(String key){
         PendingIntent action;
         synchronized(OPEN_ACTIONS){action=OPEN_ACTIONS.get(key);}
         if(action==null || !WHATSAPP.equals(action.getCreatorPackage()))return false;
         try{action.send();return true;}catch(PendingIntent.CanceledException | SecurityException e){return false;}
     }
-    private final Handler handler=new Handler(Looper.getMainLooper());
-    private final DelayQueue queue=new DelayQueue();
-    private long connectedAt=0;
-    private static volatile boolean connected=false;
-    static boolean isConnected(){return connected;}
-    private void cancelPending(){queue.clear();handler.removeCallbacksAndMessages(null);}
-    @Override public void onDestroy(){synchronized(LOCK){connected=false;connectedAt=0;cancelPending();}super.onDestroy();}
-    @Override public void onNotificationRemoved(StatusBarNotification sbn){
-        if(sbn!=null && WHATSAPP.equals(sbn.getPackageName()))synchronized(LOCK){queue.cancelNotification(sbn.getKey());}
+    @Override public void onListenerConnected(){
+        super.onListenerConnected(); connected=true;
+        Store.cleanup(this,System.currentTimeMillis());
+        Store.status(this,"Leitor conectado. Aguardando uma nova notificação do WhatsApp.");
     }
-    private void dispatchDelayed(DelayQueue.Ticket ticket){
-        synchronized(LOCK){
-            if(!queue.claim(ticket,SystemClock.uptimeMillis()))return;
-            try{
-                if(connectedAt==0)return;
-                StatusBarNotification[] active=getActiveNotifications(new String[]{ticket.notification});
-                if(active!=null)for(StatusBarNotification current:active){
-                    if(current!=null && WHATSAPP.equals(current.getPackageName()) && ticket.notification.equals(current.getKey())){
-                        process(current,ticket);return;
-                    }
-                }
-                Store.status(this,"Resposta cancelada: a notificação não está mais ativa.");
-            }catch(RuntimeException ex){Store.status(this,"Falha ao validar resposta: "+ex.getClass().getSimpleName());}
-        }
+    @Override public void onListenerDisconnected(){
+        connected=false;super.onListenerDisconnected();
+        Store.status(this,"Leitor desconectado. Verifique o acesso especial e reconecte.");
+        if(Store.prefs(this).getBoolean("consent_v2",false))requestRebind(new ComponentName(this,ReplyListener.class));
     }
-    @Override public void onListenerConnected() {
-        super.onListenerConnected(); synchronized(LOCK){cancelPending();connectedAt=System.currentTimeMillis();connected=true;}
-        Store.cleanup(this,connectedAt); Store.status(this,"Acesso conectado. Aguardando novas mensagens.");
-    }
-    @Override public void onListenerDisconnected() {
-        super.onListenerDisconnected(); synchronized(LOCK){connected=false;connectedAt=0;cancelPending();} Store.status(this,"Acesso desconectado. Confira as permissões.");
-        if(Store.prefs(this).getBoolean("consent_v2",false)) requestRebind(new ComponentName(this,ReplyListener.class));
-    }
-    @Override public void onNotificationPosted(StatusBarNotification sbn) {
-        if(sbn==null)return;
+    @Override public void onDestroy(){connected=false;super.onDestroy();}
+    @Override public void onNotificationPosted(StatusBarNotification sbn){
+        if(sbn==null || !connected)return;
+        SharedPreferences p=Store.prefs(this);
+        if(!p.getBoolean("consent_v2",false))return;
         if(getPackageName().equals(sbn.getPackageName()) && sbn.getId()==1401 && "aline-local-test".equals(sbn.getTag())){
-            SharedPreferences p=Store.prefs(this);
-            if(p.getBoolean("consent_v2",false) && connected && p.getLong("health_test_requested",0)>0){
+            if(p.getLong("health_test_requested",0)>0){
                 p.edit().putLong("health_test_seen",System.currentTimeMillis()).apply();
-                Store.status(this,"Teste local recebido: o leitor de notificações está funcionando.");
+                Store.status(this,"Teste local recebido: o leitor está funcionando.");
             }
             return;
         }
         if(!WHATSAPP.equals(sbn.getPackageName()))return;
-        if(Store.prefs(this).getBoolean("consent_v2",false))Store.prefs(this).edit().putLong("health_whatsapp_seen",System.currentTimeMillis()).apply();
-        synchronized(LOCK) {
-            try { process(sbn,null); } catch(RuntimeException e) { Store.status(this,"Notificação ignorada por incompatibilidade: "+e.getClass().getSimpleName()); }
+        p.edit().putLong("health_whatsapp_seen",System.currentTimeMillis()).apply();
+        synchronized(LOCK){
+            try{process(sbn);}catch(RuntimeException e){Store.status(this,"Falha ao processar notificação: "+e.getClass().getSimpleName());}
         }
     }
-    private static String str(CharSequence s) { return s==null?"":s.toString().trim(); }
-    private void process(StatusBarNotification sbn,DelayQueue.Ticket dispatch) {
+    private static String str(CharSequence x){return x==null?"":x.toString().trim();}
+    private void skip(String reason){Store.prefs(this).edit().putString("health_last_skip",reason).apply();}
+    private void process(StatusBarNotification sbn){
         SharedPreferences p=Store.prefs(this);
-        if(!p.getBoolean("consent_v2",false) || connectedAt==0)return;
-        if(!p.getBoolean("enabled",false)){Store.status(this,"Notificação WhatsApp recebida; automação desligada.");return;}
+        if(!connected || !p.getBoolean("consent_v2",false))return;
+        if(!p.getBoolean("enabled",false)){Store.status(this,"WhatsApp recebido, mas automação desligada.");return;}
         long now=System.currentTimeMillis();
-        if(sbn.getPostTime()<connectedAt || now-sbn.getPostTime()>120000L){Store.status(this,"Notificação anterior à conexão ou antiga; aguardando mensagem nova.");return;}
         Notification n=sbn.getNotification();
-        if(n==null || n.extras==null || (n.flags&Notification.FLAG_GROUP_SUMMARY)!=0 || (n.flags&Notification.FLAG_ONGOING_EVENT)!=0) return;
+        if(n==null || n.extras==null){skip("Notificação sem conteúdo disponível.");return;}
+        if((n.flags&Notification.FLAG_GROUP_SUMMARY)!=0){skip("Resumo de notificações; aguardando a conversa individual.");return;}
+        if((n.flags&Notification.FLAG_ONGOING_EVENT)!=0 || Notification.CATEGORY_CALL.equals(n.category)){skip("Chamada ou notificação contínua.");return;}
+        if(n.visibility==Notification.VISIBILITY_SECRET){skip("Conteúdo protegido pelo Android.");return;}
         Bundle x=n.extras;
-        if(n.visibility==Notification.VISIBILITY_SECRET || Notification.CATEGORY_CALL.equals(n.category)) return;
-        Store.cleanup(this,now);
-        if(x.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION,false) || (!x.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION) && !str(x.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)).isEmpty())){Store.status(this,"Grupo ou conversa não individual identificada; nenhuma resposta.");return;}
-        String first=p.getString("first",Store.DEFAULT_FIRST), second=p.getString("second",Store.DEFAULT_SECOND);
-        String title=str(x.getCharSequence(Notification.EXTRA_TITLE));
-        String body=str(x.getCharSequence(Notification.EXTRA_TEXT));
-        String senderId="";
-        String selfName=str(x.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME));
-        long timestamp=0;
-        boolean strongMessage=false;
-        Parcelable[] raw=x.getParcelableArray(Notification.EXTRA_MESSAGES);
-        if(raw!=null && raw.length>0) {
-            Parcelable last=raw[raw.length-1];
-            if(!(last instanceof Bundle)) return;
-            Bundle m=(Bundle)last;
-            body=str(m.getCharSequence("text")); timestamp=m.getLong("time",0);
-            String sender=str(m.getCharSequence("sender"));
-            if(Build.VERSION.SDK_INT>=28) {
-                Person person=m.getParcelable("sender_person");
-                Person me=x.getParcelable(Notification.EXTRA_MESSAGING_PERSON);
-                if(person!=null) {
-                    sender=str(person.getName());
-                    String key=str(person.getKey()), uri=str(person.getUri());
-                    if(me!=null && ((!key.isEmpty() && key.equals(str(me.getKey()))) || (!uri.isEmpty() && uri.equals(str(me.getUri()))) || person.equals(me))) return;
-                    senderId=!key.isEmpty()?key:uri;
-                }
-            }
-            if(sender.isEmpty() || (!selfName.isEmpty() && sender.equalsIgnoreCase(selfName))) return;
-            if(title.isEmpty()) title=sender;
-            strongMessage=timestamp>0;
-        }
-        if(title.isEmpty() || title.equalsIgnoreCase("WhatsApp") || (!selfName.isEmpty() && title.equalsIgnoreCase(selfName)) || body.isEmpty() || body.equals(first.trim()) || body.equals(second.trim())) return;
-        if(timestamp<=0){timestamp=n.when>0?n.when:sbn.getPostTime();strongMessage=n.when>0;}
-        if(!Store.day(timestamp).equals(Store.day(now))) return;
+        String title=str(x.getCharSequence(Notification.EXTRA_TITLE)),body=str(x.getCharSequence(Notification.EXTRA_TEXT));
+        String sender="",senderId="",selfName=str(x.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME));
+        String conversation=str(x.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE));
         String shortcut=Build.VERSION.SDK_INT>=26?str(n.getShortcutId()):"";
+        long messageAt=0;
+        Boolean explicit=x.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION)?x.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION):null;
+        NotificationCompat.MessagingStyle style=null;
+        try{style=NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n);}catch(RuntimeException ignored){}
+        if(style!=null){
+            if(conversation.isEmpty())conversation=str(style.getConversationTitle());
+            List<NotificationCompat.MessagingStyle.Message> messages=style.getMessages();
+            if(!messages.isEmpty()){
+                NotificationCompat.MessagingStyle.Message m=messages.get(messages.size()-1);
+                Person from=m.getPerson(),me=style.getUser();
+                if(from==null){skip("Última mensagem é própria ou não tem remetente identificável.");return;}
+                sender=str(from.getName());
+                String key=str(from.getKey()),uri=str(from.getUri());
+                if(me!=null && NotificationPolicy.samePerson(key,uri,sender,str(me.getKey()),str(me.getUri()),str(me.getName()))){skip("Mensagem própria, sem resposta.");return;}
+                if(!selfName.isEmpty() && NotificationPolicy.same(sender,selfName)){skip("Mensagem própria.");return;}
+                senderId=!key.isEmpty()?key:uri;
+                String message=str(m.getText());
+                if(!message.isEmpty())body=message;
+                else if(m.getDataMimeType()!=null)body="[Anexo recebido]";
+                messageAt=m.getTimestamp();
+                if(title.isEmpty())title=sender;
+            }
+        }
+        if(NotificationPolicy.isGroup(explicit,conversation,sender,title,shortcut,str(sbn.getTag()))){skip("Grupo ou transmissão excluída.");return;}
+        if(title.isEmpty() || title.equalsIgnoreCase("WhatsApp") || NotificationPolicy.same(title,selfName) || body.isEmpty()){skip("Sem remetente ou texto visível.");return;}
+        String first=p.getString("first",Store.DEFAULT_FIRST),second=p.getString("second",Store.DEFAULT_SECOND);
+        if(body.equals(first.trim()) || body.equals(second.trim())){skip("Eco de uma mensagem automática.");return;}
+        long timestamp=NotificationPolicy.messageTime(messageAt,sbn.getPostTime(),now);
+        if(now-timestamp>120000L || timestamp>now+60000L || !Store.day(timestamp).equals(Store.day(now))){skip("Mensagem antiga ou data inválida.");return;}
         String identity=!shortcut.isEmpty()?"shortcut:"+shortcut:!senderId.isEmpty()?"sender:"+senderId:"title:"+title;
         String key=Store.hash(sbn.getUser().toString()+"|"+identity);
-        String event=Store.hash(identity+"|"+body+(strongMessage?"|"+timestamp:""));
-        if(dispatch!=null && (!dispatch.contact.equals(key) || !dispatch.event.equals(event))){
-            Store.status(this,"Resposta cancelada: o conteúdo da notificação mudou.");return;
-        }
+        String event=Store.hash(identity+"|"+body+"|"+timestamp);
+        // Preserve the prior daily state keys; also reject the legacy text-only signature.
         RuleEngine.State previous=Store.read(this,key);
+        if(previous!=null && previous.event.equals(Store.hash(identity+"|"+body))){skip("Duplicidade de registro anterior.");return;}
         int stage=RuleEngine.decide(previous,Store.day(now),event,timestamp,now,true,p.getBoolean("second_enabled",true),!first.trim().isEmpty(),!second.trim().isEmpty());
-        if(stage==RuleEngine.NONE){if(dispatch!=null)Store.status(this,"Resposta cancelada: regra diária, duplicidade ou mensagem antiga.");return;}
-        Notification.Action action=findReply(n);
-        if(action==null) { Store.status(this,"WhatsApp não disponibilizou a ação de resposta rápida."); return; }
-        if(dispatch==null){
-            DelayQueue.Ticket ticket=queue.offer(key,event,sbn.getKey(),SystemClock.uptimeMillis());
-            if(ticket!=null){
-                handler.postAtTime(()->dispatchDelayed(ticket),ticket.due);
-                Store.status(this,"Resposta automática programada para daqui a 5 segundos.");
-            }
-            return;
-        }
-        RemoteInput input=null; for(RemoteInput r:action.getRemoteInputs()) if(r.getAllowFreeFormInput()){input=r;break;}
-        if(input==null){Store.status(this,"Ação do WhatsApp sem campo de resposta de texto.");return;}
+        if(stage==RuleEngine.NONE){skip("Limite diário, duplicidade, segunda resposta desativada ou mensagem anterior.");return;}
+        List<NotificationCompat.Action> actions=replyActions(n);
+        if(actions.isEmpty()){Store.status(this,"WhatsApp recebido, mas não há ação de resposta autorizada. Confira se a notificação oferece Responder.");return;}
+        if(!connected || !p.getBoolean("consent_v2",false) || !p.getBoolean("enabled",false))return;
         String reply=stage==RuleEngine.FIRST?first:second;
-        Intent fill=new Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
-        Bundle data=new Bundle(); data.putCharSequence(input.getResultKey(),reply);
-        RemoteInput.addResultsToIntent(new RemoteInput[]{input},fill,data);
-        if(!p.getBoolean("consent_v2",false) || !p.getBoolean("enabled",false)) return;
-        if(!Store.write(this,key,new RuleEngine.State(Store.day(now),stage,event,now))) { Store.status(this,"Não foi possível gravar o controle de respostas."); return; }
-        try {
-            action.actionIntent.send(this,0,fill);
-        } catch(PendingIntent.CanceledException | SecurityException e) {
-            Store.write(this,key,previous); Store.status(this,"Resposta recusada pelo Android: "+e.getClass().getSimpleName()); return;
+        // Reserve the daily stage before dispatch, restoring it only if no action was sent.
+        long sentAt=System.currentTimeMillis();
+        if(!Store.write(this,key,new RuleEngine.State(Store.day(now),stage,event,sentAt))){Store.status(this,"Falha ao persistir o controle diário.");return;}
+        boolean sent=false;
+        for(NotificationCompat.Action action:actions){
+            try{
+                ArrayList<RemoteInput> inputs=new ArrayList<>();
+                Bundle data=new Bundle();
+                for(RemoteInput input:action.getRemoteInputs())if(input.getAllowFreeFormInput()){
+                    inputs.add(input);data.putCharSequence(input.getResultKey(),reply);
+                }
+                if(inputs.isEmpty())continue;
+                Intent fill=new Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+                RemoteInput.addResultsToIntent(inputs.toArray(new RemoteInput[0]),fill,data);
+                action.actionIntent.send(this,0,fill);
+                sent=true;break;
+            }catch(PendingIntent.CanceledException e){/* Try another valid reply action from this notification. */}
+            catch(SecurityException e){Store.status(this,"O Android recusou a ação de resposta.");break;}
+            catch(RuntimeException e){Store.status(this,"Falha de resposta: "+e.getClass().getSimpleName());break;}
+        }
+        if(!sent){
+            Store.write(this,key,previous);
+            Store.status(this,"Não foi possível encaminhar a resposta: ação indisponível ou recusada.");return;
         }
         if(n.contentIntent!=null && WHATSAPP.equals(n.contentIntent.getCreatorPackage()))synchronized(OPEN_ACTIONS){OPEN_ACTIONS.put(key,n.contentIntent);}
-        if(!Attendance.record(this,key,title,body,reply,stage,now)){
-            Store.status(this,"Resposta encaminhada, mas não foi possível gravar a central.");return;
-        }
-        Store.status(this,stage==RuleEngine.FIRST?"Saudação encaminhada ao WhatsApp.":"Segunda resposta encaminhada ao WhatsApp.");
+        p.edit().putLong("health_last_dispatch",sentAt).putString("health_last_skip","").apply();
+        if(!Attendance.record(this,key,title,body,reply,stage,sentAt)){Store.status(this,"Resposta encaminhada, mas registro de atendimento falhou.");return;}
+        Store.status(this,stage==RuleEngine.FIRST?"Primeira resposta encaminhada ao WhatsApp.":"Segunda resposta encaminhada ao WhatsApp.");
     }
-    private Notification.Action findReply(Notification n) {
-        java.util.ArrayList<Notification.Action> candidates=new java.util.ArrayList<>();
-        if(n.actions!=null)java.util.Collections.addAll(candidates,n.actions);
-        candidates.addAll(new Notification.WearableExtender(n).getActions());
-        Notification.Action best=null;int bestScore=-1;
-        for(Notification.Action a:candidates){
-            if(!usable(a))continue;
-            int score=0;
-            String label=str(a.title).toLowerCase(Locale.ROOT);
-            if(label.contains("reply") || label.contains("responder") || label.contains("répondre") || label.contains("antworten"))score=1;
-            if(Build.VERSION.SDK_INT>=28 && a.getSemanticAction()==Notification.Action.SEMANTIC_ACTION_REPLY)score=2;
-            if(score>bestScore){best=a;bestScore=score;}
+    private List<NotificationCompat.Action> replyActions(Notification n){
+        ArrayList<NotificationCompat.Action> all=new ArrayList<>();
+        int count=NotificationCompat.getActionCount(n);
+        for(int i=0;i<count;i++){
+            try{NotificationCompat.Action a=NotificationCompat.getAction(n,i);if(usable(a))all.add(a);}catch(RuntimeException ignored){}
         }
-        return best;
+        try{for(NotificationCompat.Action a:new NotificationCompat.WearableExtender(n).getActions())if(usable(a))all.add(a);}catch(RuntimeException ignored){}
+        all.sort((a,b)->Integer.compare(score(b),score(a)));
+        return all;
     }
-    private boolean usable(Notification.Action a) {
-        if(a==null || a.actionIntent==null || !WHATSAPP.equals(a.actionIntent.getCreatorPackage()) || a.getRemoteInputs()==null) return false;
-        if(Build.VERSION.SDK_INT>=31 && a.isAuthenticationRequired())return false;
+    private int score(NotificationCompat.Action a){
+        String label=str(a.getTitle()).toLowerCase(Locale.ROOT);
+        return a.getSemanticAction()==NotificationCompat.Action.SEMANTIC_ACTION_REPLY?2:label.contains("reply")||label.contains("responder")||label.contains("répondre")?1:0;
+    }
+    private boolean usable(NotificationCompat.Action a){
+        if(a==null || a.actionIntent==null || !WHATSAPP.equals(a.actionIntent.getCreatorPackage()) || a.getRemoteInputs()==null)return false;
+        if(a.isAuthenticationRequired())return false;
         if(Build.VERSION.SDK_INT>=31 && a.actionIntent.isImmutable())return false;
-        for(RemoteInput r:a.getRemoteInputs()) if(r.getAllowFreeFormInput()) return true;
+        for(RemoteInput r:a.getRemoteInputs())if(r.getAllowFreeFormInput())return true;
         return false;
     }
 }

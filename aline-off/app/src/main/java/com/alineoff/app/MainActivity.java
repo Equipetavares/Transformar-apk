@@ -47,7 +47,7 @@ public class MainActivity extends Activity {
             root.setPadding(dp(20)+insets.getSystemWindowInsetLeft(),dp(20)+insets.getSystemWindowInsetTop(),dp(20)+insets.getSystemWindowInsetRight(),dp(24)+insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         }); scroll.requestApplyInsets();
-        TextView brand=text("ALINE OFF  /  1.4",12,GREEN,true); root.addView(brand);
+        TextView brand=text("ALINE OFF  /  1.5",12,GREEN,true); root.addView(brand);
         ImageView mascot=new ImageView(this); mascot.setImageResource(R.drawable.logo); mascot.setContentDescription("Mascote pitbull do Aline off"); root.addView(mascot,new LinearLayout.LayoutParams(dp(76),dp(76)));
         root.addView(text("Seu WhatsApp,\nsempre atendido.",29,INK,true));
         root.addView(text("Respostas automáticas • WhatsApp Messenger",14,MUTED,false));
@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
         setup.addView(button("2. Permitir avisos do Aline off (opcional)",this::requestOwnNotifications,false));
         setup.addView(button("3. Testar conexão com Android",this::testConnection,false));
         setup.addView(button("Verificar / reconectar serviço",this::reconnect,false));
+        setup.addView(button("Salvar e ativar automação",this::activateNow,true));
         setup.addView(text("A leitura de notificações é essencial. Os avisos do Aline off são opcionais e permitem o teste local. Nenhuma permissão de contatos, SMS ou acessibilidade é necessária.",13,MUTED,false));
         LinearLayout attendance=panel(root); attendance.addView(text("Central de Atendimentos",20,INK,true));
         attendanceCount=text("",15,GREEN,true); attendance.addView(attendanceCount);
@@ -76,14 +77,14 @@ public class MainActivity extends Activity {
             p.edit().putBoolean("enabled",on).apply(); refresh();
         });
         rules.addView(text("Mensagem 1 · boas-vindas",15,INK,true));
-        rules.addView(text("Uma vez por conversa a cada dia, após 5 segundos.",13,MUTED,false));
+        rules.addView(text("Uma vez por conversa a cada dia, sem atraso programado.",13,MUTED,false));
         first=editor(p.getString("first",Store.DEFAULT_FIRST)); rules.addView(first);
         secondEnabled=new Switch(this); secondEnabled.setText("Usar segunda mensagem"); secondEnabled.setTextColor(INK); secondEnabled.setChecked(p.getBoolean("second_enabled",true)); rules.addView(secondEnabled);
-        rules.addView(text("Mensagem 2 · 5 segundos após nova mensagem",15,INK,true));
+        rules.addView(text("Mensagem 2 · após nova mensagem",15,INK,true));
         second=editor(p.getString("second",Store.DEFAULT_SECOND)); second.setEnabled(secondEnabled.isChecked()); rules.addView(second);
         secondEnabled.setOnCheckedChangeListener((v,on)->second.setEnabled(on));
         rules.addView(button("Salvar mensagens",this::save,true));
-        rules.addView(text("Cada resposta aguarda 5 segundos. Se chegar outra mensagem durante a espera, o prazo reinicia para a última. A resposta é cancelada se a notificação deixar de existir. Depois da segunda resposta, não envia mais nada para a conversa até o dia seguinte. Grupos não são atendidos quando identificados.",13,MUTED,false));
+        rules.addView(text("A resposta é encaminhada imediatamente quando uma notificação elegível chega. Depois da segunda resposta, não envia mais nada para a conversa até o dia seguinte. Grupos não são atendidos quando identificados.",13,MUTED,false));
         LinearLayout diag=panel(root); diag.addView(text("03   Diagnóstico",18,INK,true));
         diagnostics=text("",14,MUTED,false); diag.addView(diagnostics);
         diag.addView(button("Atualizar status",this::refresh,false));
@@ -144,6 +145,13 @@ public class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] results){
         super.onRequestPermissionsResult(requestCode,permissions,results);refresh();
     }
+    private void activateNow(){
+        if(!hasAccess() || !p.getBoolean("consent_v2",false)){requestNotificationConsent();return;}
+        String a=first.getText().toString().trim(), b=second.getText().toString().trim();
+        if(a.isEmpty() || (secondEnabled.isChecked() && b.isEmpty())){Toast.makeText(this,"Preencha as mensagens ativas.",Toast.LENGTH_LONG).show();return;}
+        if(!p.edit().putString("first",a).putString("second",b).putBoolean("second_enabled",secondEnabled.isChecked()).putBoolean("enabled",true).commit()){Toast.makeText(this,"Falha ao salvar.",Toast.LENGTH_SHORT).show();return;}
+        enabled.setChecked(true);reconnect();refresh();
+    }
     private void reconnect(){
         if(!hasAccess() || !p.getBoolean("consent_v2",false)){requestNotificationConsent();return;}
         if(!ReplyListener.isConnected()){
@@ -186,6 +194,7 @@ public class MainActivity extends Activity {
             String test=requested==0?"Não realizado":seen>=requested?"Recebido com sucesso":System.currentTimeMillis()-requested<6500?"Aguardando notificação":"Não recebido; confira o canal de teste e a conexão";
             permissionDetails.setText("Consentimento: "+(consent?"concedido":"pendente")+"\nLeitura de notificações: "+(granted?"autorizada":"NÃO AUTORIZADA")+"\nServiço do Android: "+(granted&&connected?"conectado":"desconectado")+"\nAvisos próprios (opcional): "+(ownNotifications()?"permitidos":"bloqueados")+"\nWhatsApp Messenger: "+(getPackageManager().getLaunchIntentForPackage("com.whatsapp")!=null?"encontrado":"não encontrado")+"\nTeste local: "+test+"\nÚltimo evento WhatsApp: "+(wa>0?DateFormat.getDateTimeInstance().format(new Date(wa)):"nenhum desde a instalação"));
         }
+        if(permissionDetails!=null){long sent=p.getLong("health_last_dispatch",0);permissionDetails.append("\nÚltima ação encaminhada: "+(sent>0?DateFormat.getDateTimeInstance().format(new Date(sent)):"nenhuma")+"\nÚltimo filtro: "+p.getString("health_last_skip","nenhum"));}
         status.setText(hasAccess()?"✓ Permissão concedida":"○ Permissão pendente"); status.setTextColor(hasAccess()?GREEN:MUTED);
         long at=p.getLong("last_status_at",0);
         diagnostics.setText((p.getBoolean("enabled",false)?"Automação ligada":"Automação desligada")+"\n"+p.getString("last_status","Nenhum evento registrado.")+(at>0?"\n"+DateFormat.getDateTimeInstance().format(new Date(at)):""));
