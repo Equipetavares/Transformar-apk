@@ -33,6 +33,14 @@ public class RuleEngineTest {
         eq("timestamp from post",20,(int)NotificationPolicy.messageTime(0,20,30));
         eq("immediate first",1,d(null,day,"instant",t,t,true,true));
         eq("immediate second",2,d(first,day,"b",t+1,t+1,true,true));
+        eq("supports messenger",1,WhatsAppApps.supported(WhatsAppApps.MESSENGER)?1:0);
+        eq("supports business",1,WhatsAppApps.supported(WhatsAppApps.BUSINESS)?1:0);
+        eq("reject unrelated package",0,WhatsAppApps.supported("com.example.other")?1:0);
+        eq("messenger only",0,WhatsAppApps.enabled(WhatsAppApps.BUSINESS,true,false)?1:0);
+        eq("business only",0,WhatsAppApps.enabled(WhatsAppApps.MESSENGER,false,true)?1:0);
+        eq("business enabled",1,WhatsAppApps.enabled(WhatsAppApps.BUSINESS,true,true)?1:0);
+        eq("messenger legacy key preserved",1,WhatsAppApps.contactScope(WhatsAppApps.MESSENGER,"u","id").equals("u|id")?1:0);
+        eq("account scopes isolated",0,WhatsAppApps.contactScope(WhatsAppApps.MESSENGER,"u","id").equals(WhatsAppApps.contactScope(WhatsAppApps.BUSINESS,"u","id"))?1:0);
         System.out.println(count+" tests passed");
     }
 }

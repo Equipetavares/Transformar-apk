@@ -6,3 +6,5 @@ A central de atendimentos armazena localmente o nome exibido, trechos recebidos 
 Versão 1.4: a permissão opcional POST_NOTIFICATIONS permite gerar um aviso local de teste. O diagnóstico registra somente horários do teste e do último evento WhatsApp, sem conteúdo adicional. O acesso especial de leitura continua exigindo autorização pelo sistema.
 
 Versão 1.6: relatório técnico local com até 30 eventos sem nomes ou textos de conversas. O teste completo usa apenas uma notificação do próprio aplicativo e um receptor privado, com um identificador aleatório de uso único. Não envia nada ao WhatsApp durante esse teste. O relatório só é copiado mediante ação do usuário.
+
+Versão 1.7: suporte opcional ao WhatsApp Business mediante confirmação explícita. Cada aplicativo tem controle diário separado e identificação de origem na central; as mesmas mensagens configuradas são compartilhadas. O processamento continua exclusivamente local.

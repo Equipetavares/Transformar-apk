@@ -11,15 +11,15 @@ import java.util.Collections;
 final class Attendance {
     static SharedPreferences prefs(Context c){return c.getSharedPreferences("aline_attendance",Context.MODE_PRIVATE);}
     static final class Entry {
-        final String key,name; final long at; final boolean done; final JSONArray messages;
-        Entry(String key,JSONObject o){this.key=key;name=o.optString("name","Contato");at=o.optLong("at");done=o.optBoolean("done");JSONArray m=o.optJSONArray("messages");messages=m==null?new JSONArray():m;}
+        final String key,name,pkg; final long at; final boolean done; final JSONArray messages;
+        Entry(String key,JSONObject o){this.key=key;pkg=o.optString("package",WhatsAppApps.MESSENGER);name=o.optString("name","Contato");at=o.optLong("at");done=o.optBoolean("done");JSONArray m=o.optJSONArray("messages");messages=m==null?new JSONArray():m;}
     }
     static String limited(String s){return s.length()>1500?s.substring(0,1500)+"…":s;}
     private static JSONObject read(Context c,String key){
         try{return new JSONObject(prefs(c).getString(key,"{}"));}catch(Exception ex){return new JSONObject();}
     }
-    static synchronized boolean record(Context c,String key,String name,String incoming,String outgoing,int stage,long now){
-        if(!Store.prefs(c).getBoolean("consent_v2",false))return false;
+    static synchronized boolean record(Context c,String key,String pkg,String name,String incoming,String outgoing,int stage,long now){
+        if(!Store.prefs(c).getBoolean("consent_v2",false) || !WhatsAppApps.supported(pkg))return false;
         try{
             JSONObject o=read(c,key);
             JSONArray history=o.optJSONArray("messages");
@@ -27,7 +27,7 @@ final class Attendance {
             JSONArray next=new JSONArray();
             for(int i=Math.max(0,history.length()-19);i<history.length();i++)next.put(history.getJSONObject(i));
             next.put(new JSONObject().put("incoming",limited(incoming)).put("outgoing",limited(outgoing)).put("stage",stage).put("at",now));
-            o.put("name",limited(name)).put("at",now).put("done",false).put("messages",next);
+            o.put("package",pkg).put("name",limited(name)).put("at",now).put("done",false).put("messages",next);
             return prefs(c).edit().putString(key,o.toString()).commit();
         }catch(Exception e){return false;}
     }

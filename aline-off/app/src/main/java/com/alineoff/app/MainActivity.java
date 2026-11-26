@@ -34,7 +34,8 @@ public class MainActivity extends Activity {
     private LinearLayout attendanceRows;
     private boolean showDone=false;
     private final SharedPreferences.OnSharedPreferenceChangeListener attendanceListener=(prefs,key)->runOnUiThread(this::refreshAttendance);
-    private Switch enabled, secondEnabled;
+    private Switch enabled, secondEnabled, messengerSwitch, businessSwitch;
+    private boolean syncingApps=false;
     private EditText first, second;
     private final SharedPreferences.OnSharedPreferenceChangeListener listener=(prefs,key)->{if(key!=null && (key.startsWith("last_status") || key.startsWith("health_"))) runOnUiThread(this::refresh);};
     int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
@@ -47,10 +48,10 @@ public class MainActivity extends Activity {
             root.setPadding(dp(20)+insets.getSystemWindowInsetLeft(),dp(20)+insets.getSystemWindowInsetTop(),dp(20)+insets.getSystemWindowInsetRight(),dp(24)+insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         }); scroll.requestApplyInsets();
-        TextView brand=text("ALINE OFF  /  1.6",12,GREEN,true); root.addView(brand);
+        TextView brand=text("ALINE OFF  /  1.7",12,GREEN,true); root.addView(brand);
         ImageView mascot=new ImageView(this); mascot.setImageResource(R.drawable.logo); mascot.setContentDescription("Mascote pitbull do Aline off"); root.addView(mascot,new LinearLayout.LayoutParams(dp(76),dp(76)));
         root.addView(text("Seu WhatsApp,\nsempre atendido.",29,INK,true));
-        root.addView(text("Respostas automáticas • WhatsApp Messenger",14,MUTED,false));
+        root.addView(text("Respostas automáticas • Messenger e Business",14,MUTED,false));
         LinearLayout setup=panel(root); setup.addView(text("Configuração e permissões",20,INK,true));
         permissionDetails=text("",14,INK,false);setup.addView(permissionDetails);
         setup.addView(button("1. Autorizar leitura de notificações",this::requestNotificationConsent,true));
@@ -60,6 +61,24 @@ public class MainActivity extends Activity {
         setup.addView(button("Copiar relatório técnico",this::copyDiagnostic,false));
         setup.addView(button("Salvar e ativar automação",this::activateNow,true));
         setup.addView(text("A leitura de notificações é essencial. Os avisos do Aline off são opcionais e permitem o teste local. Nenhuma permissão de contatos, SMS ou acessibilidade é necessária.",13,MUTED,false));
+        LinearLayout apps=panel(root);apps.addView(text("Aplicativos atendidos",20,INK,true));
+        apps.addView(text("Use as duas contas simultaneamente ou escolha apenas uma. As mensagens configuradas valem para ambas; o limite diário é separado.",13,MUTED,false));
+        messengerSwitch=new Switch(this);messengerSwitch.setText("WhatsApp Messenger");messengerSwitch.setTextColor(INK);apps.addView(messengerSwitch);
+        businessSwitch=new Switch(this);businessSwitch.setText("WhatsApp Business");businessSwitch.setTextColor(INK);apps.addView(businessSwitch);
+        syncApps();
+        messengerSwitch.setOnCheckedChangeListener((v,on)->{
+            if(syncingApps)return;
+            p.edit().putBoolean("app_messenger",on).apply();refresh();
+        });
+        businessSwitch.setOnCheckedChangeListener((v,on)->{
+            if(syncingApps)return;
+            if(!on){p.edit().putBoolean("app_business",false).apply();refresh();return;}
+            syncApps();
+            new AlertDialog.Builder(this).setTitle("Ativar WhatsApp Business?")
+                .setMessage("Com o acesso especial já autorizado, o Aline off também lerá as notificações do WhatsApp Business, enviará as respostas configuradas e guardará localmente os atendimentos, da mesma forma que no Messenger. Nenhum dado será enviado ao servidor do Aline off.")
+                .setNegativeButton("Cancelar",null)
+                .setPositiveButton("Autorizar e ativar",(d,w)->{p.edit().putBoolean("app_business",true).apply();syncApps();refresh();}).show();
+        });
         LinearLayout attendance=panel(root); attendance.addView(text("Central de Atendimentos",20,INK,true));
         attendanceCount=text("",15,GREEN,true); attendance.addView(attendanceCount);
         attendance.addView(text("Conversas com resposta automática encaminhada. O retorno humano deve ser confirmado por você.",13,MUTED,false));
@@ -69,7 +88,7 @@ public class MainActivity extends Activity {
         LinearLayout access=panel(root); access.addView(text("01   Conexão com Android",18,INK,true));
         status=text("",14,MUTED,false); access.addView(status);
         access.addView(button("Conceder acesso às notificações",this::requestNotificationConsent,false));
-        access.addView(text("O Android concede acesso amplo às notificações; o Aline off usa apenas as do WhatsApp Messenger para responder no seu aparelho. Nenhuma mensagem é enviada a servidores do Aline off.",13,MUTED,false));
+        access.addView(text("O Android concede acesso amplo às notificações; o Aline off usa apenas as dos aplicativos WhatsApp Messenger e Business que você ativar para responder no seu aparelho. Nenhuma mensagem é enviada a servidores do Aline off.",13,MUTED,false));
         LinearLayout rules=panel(root); rules.addView(text("02   Suas mensagens",18,INK,true));
         enabled=new Switch(this); enabled.setText("Ativar respostas automáticas"); enabled.setTextColor(INK); enabled.setChecked(p.getBoolean("enabled",false) && p.getBoolean("consent_v2",false) && hasAccess()); rules.addView(enabled);
         enabled.setOnCheckedChangeListener((v,on)->{
@@ -100,10 +119,10 @@ public class MainActivity extends Activity {
     }
     @Override public void onResume(){super.onResume();p.registerOnSharedPreferenceChangeListener(listener);Attendance.prefs(this).registerOnSharedPreferenceChangeListener(attendanceListener);if(!hasAccess() || !p.getBoolean("consent_v2",false)){p.edit().putBoolean("enabled",false).apply();enabled.setChecked(false);}refresh();}
     @Override public void onPause(){p.unregisterOnSharedPreferenceChangeListener(listener);Attendance.prefs(this).unregisterOnSharedPreferenceChangeListener(attendanceListener);uiHandler.removeCallbacksAndMessages(null);super.onPause();}
-    private static final String PRIVACY="O Aline off processa localmente as notificações do WhatsApp Messenger, incluindo o texto e a identificação da conversa, para decidir e enviar as respostas configuradas. O Android pode disponibilizar notificações de outros aplicativos, mas elas são descartadas antes da leitura do conteúdo. Não há acesso à Internet pelo aplicativo, anúncios, SDKs de rastreamento ou transferência de conteúdo a servidores do desenvolvedor. As mensagens configuradas e identificadores derivados, data e etapa das respostas ficam no armazenamento privado do aparelho. O histórico técnico é removido após sete dias nas rotinas de limpeza. A central guarda localmente o nome exibido, trechos recebidos e respostas automáticas encaminhadas, com data e etapa, até 20 registros por conversa. Pendências permanecem até atendimento ou exclusão; atendidos são removidos após sete dias nas rotinas de limpeza. A resposta escolhida é encaminhada ao WhatsApp. Você pode desligar a automação ou revogar o consentimento e apagar os dados nesta tela. Também pode revogar a permissão nas configurações do Android. O Aline off não é afiliado à Meta.";
+    private static final String PRIVACY="O Aline off processa localmente as notificações do WhatsApp Messenger e do WhatsApp Business quando ativados, incluindo o texto e a identificação da conversa, para decidir e enviar as respostas configuradas. O Android pode disponibilizar notificações de outros aplicativos, mas elas são descartadas antes da leitura do conteúdo. Não há acesso à Internet pelo aplicativo, anúncios, SDKs de rastreamento ou transferência de conteúdo a servidores do desenvolvedor. As mensagens configuradas e identificadores derivados, data e etapa das respostas ficam no armazenamento privado do aparelho. O histórico técnico é removido após sete dias nas rotinas de limpeza. A central guarda localmente o nome exibido, trechos recebidos e respostas automáticas encaminhadas, com data e etapa, até 20 registros por conversa. Pendências permanecem até atendimento ou exclusão; atendidos são removidos após sete dias nas rotinas de limpeza. A resposta escolhida é encaminhada ao WhatsApp. Você pode desligar a automação ou revogar o consentimento e apagar os dados nesta tela. Também pode revogar a permissão nas configurações do Android. O Aline off não é afiliado à Meta.";
     private void requestNotificationConsent(){
         new AlertDialog.Builder(this).setTitle("Permitir respostas automáticas?")
-            .setMessage("O Android pode disponibilizar todas as suas notificações, inclusive dados pessoais. O Aline off ignora outros apps e lê somente notificações do WhatsApp Messenger para enviar as duas respostas que você configurar, mesmo com o aplicativo fechado. Para a central de atendimentos, o app também guarda no aparelho o nome exibido, trechos das mensagens recebidas e respostas encaminhadas até você marcar como atendido ou apagar. Atendimentos concluídos são removidos após sete dias. Você pode revogar o acesso a qualquer momento. Deseja continuar?")
+            .setMessage("O Android pode disponibilizar todas as suas notificações, inclusive dados pessoais. O Aline off ignora outros apps e lê somente notificações das versões do WhatsApp que você ativar (Messenger ou Business) para enviar as duas respostas que você configurar, mesmo com o aplicativo fechado. Para a central de atendimentos, o app também guarda no aparelho o nome exibido, trechos das mensagens recebidas e respostas encaminhadas até você marcar como atendido ou apagar. Atendimentos concluídos são removidos após sete dias. Você pode revogar o acesso a qualquer momento. Deseja continuar?")
             .setNegativeButton("Agora não",null)
             .setPositiveButton("Concordo e continuar",(d,w)->{
                 if(p.edit().putBoolean("consent_v2",true).commit()) openListenerSettings();
@@ -113,7 +132,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Apagar dados e desligar?")
             .setMessage("Isso apaga suas mensagens configuradas, o controle diário, os diagnósticos e a central de atendimentos. Revogue também o acesso do Aline off na próxima tela do Android.")
             .setNegativeButton("Cancelar",null).setPositiveButton("Apagar e revogar",(d,w)->{
-                p.edit().clear().commit(); Store.state(this).edit().clear().commit(); Attendance.clear(this);
+                p.edit().clear().commit(); Store.state(this).edit().clear().commit(); Attendance.clear(this);syncApps();
                 enabled.setChecked(false); first.setText(Store.DEFAULT_FIRST); second.setText(Store.DEFAULT_SECOND); secondEnabled.setChecked(true);
                 refresh(); openListenerSettings();
             }).show();
@@ -147,6 +166,13 @@ public class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] results){
         super.onRequestPermissionsResult(requestCode,permissions,results);refresh();
     }
+    private void syncApps(){
+        if(messengerSwitch==null || businessSwitch==null)return;
+        syncingApps=true;
+        messengerSwitch.setChecked(p.getBoolean("app_messenger",true));
+        businessSwitch.setChecked(p.getBoolean("app_business",false));
+        syncingApps=false;
+    }
     private void activateNow(){
         if(!hasAccess() || !p.getBoolean("consent_v2",false)){requestNotificationConsent();return;}
         String a=first.getText().toString().trim(), b=second.getText().toString().trim();
@@ -163,7 +189,7 @@ public class MainActivity extends Activity {
         }else{refresh();Toast.makeText(this,"Serviço conectado.",Toast.LENGTH_SHORT).show();}
     }
     private void copyDiagnostic(){
-        String report="Aline off 1.6.0 | Android "+Build.VERSION.RELEASE+" | API "+Build.VERSION.SDK_INT+" | "+Build.MANUFACTURER+" "+Build.MODEL+"\n"+permissionDetails.getText()+"\n"+diagnostics.getText()+"\n"+p.getString("health_trace","");
+        String report="Aline off 1.7.0 | Android "+Build.VERSION.RELEASE+" | API "+Build.VERSION.SDK_INT+" | "+Build.MANUFACTURER+" "+Build.MODEL+"\n"+permissionDetails.getText()+"\n"+diagnostics.getText()+"\n"+p.getString("health_trace","");
         android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
         if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText("Diagnóstico Aline off",report));
         Toast.makeText(this,"Relatório copiado. Não contém mensagens ou nomes dos contatos.",Toast.LENGTH_LONG).show();
@@ -212,8 +238,9 @@ public class MainActivity extends Activity {
             long requested=p.getLong("health_test_requested",0), seen=p.getLong("health_test_seen",0), wa=p.getLong("health_whatsapp_seen",0);
             long verified=p.getLong("health_probe_verified",0);
             String test=requested==0?"Não realizado":verified>=requested?"APROVADO: texto recebido":seen>=requested?"Leitura OK; envio: "+p.getString("health_probe_transport","aguardando")+" "+p.getString("health_probe_error",""):System.currentTimeMillis()-requested<6500?"Aguardando notificação":"Não recebido pelo leitor";
-            permissionDetails.setText("Consentimento: "+(consent?"concedido":"pendente")+"\nLeitura de notificações: "+(granted?"autorizada":"NÃO AUTORIZADA")+"\nServiço do Android: "+(granted&&connected?"conectado":"desconectado")+"\nAvisos próprios (opcional): "+(ownNotifications()?"permitidos":"bloqueados")+"\nWhatsApp Messenger: "+(getPackageManager().getLaunchIntentForPackage("com.whatsapp")!=null?"encontrado":"não encontrado")+"\nTeste local: "+test+"\nÚltimo evento WhatsApp: "+(wa>0?DateFormat.getDateTimeInstance().format(new Date(wa)):"nenhum desde a instalação"));
+            permissionDetails.setText("Consentimento: "+(consent?"concedido":"pendente")+"\nLeitura de notificações: "+(granted?"autorizada":"NÃO AUTORIZADA")+"\nServiço do Android: "+(granted&&connected?"conectado":"desconectado")+"\nAvisos próprios (opcional): "+(ownNotifications()?"permitidos":"bloqueados")+"\nWhatsApp Messenger: "+(getPackageManager().getLaunchIntentForPackage(WhatsAppApps.MESSENGER)!=null?"encontrado":"não encontrado")+"\nTeste local: "+test+"\nÚltimo evento WhatsApp: "+(wa>0?DateFormat.getDateTimeInstance().format(new Date(wa)):"nenhum desde a instalação"));
         }
+        if(permissionDetails!=null)permissionDetails.append("\nWhatsApp Business: "+(getPackageManager().getLaunchIntentForPackage(WhatsAppApps.BUSINESS)!=null?"encontrado":"não encontrado")+"\nMessenger: "+(p.getBoolean("app_messenger",true)?"selecionado":"desativado")+" | eventos: "+p.getInt("health_count_messenger",0)+"\nBusiness: "+(p.getBoolean("app_business",false)?"selecionado":"desativado")+" | eventos: "+p.getInt("health_count_business",0));
         if(permissionDetails!=null){long sent=p.getLong("health_last_dispatch",0);permissionDetails.append("\nEventos do WhatsApp: "+p.getInt("health_wa_count",0)+"\nÚltima ação encaminhada: "+(sent>0?DateFormat.getDateTimeInstance().format(new Date(sent)):"nenhuma")+"\nÚltimo filtro: "+p.getString("health_last_skip","nenhum"));}
         status.setText(hasAccess()?"✓ Permissão concedida":"○ Permissão pendente"); status.setTextColor(hasAccess()?GREEN:MUTED);
         long at=p.getLong("last_status_at",0);
@@ -231,6 +258,7 @@ public class MainActivity extends Activity {
             if(e.done!=showDone)continue; any=true;
             LinearLayout row=panel(attendanceRows);
             row.addView(text(e.name,16,INK,true));
+            row.addView(text(WhatsAppApps.label(e.pkg),12,GREEN,true));
             row.addView(text(DateFormat.getDateTimeInstance().format(new Date(e.at)),12,MUTED,false));
             JSONObject last=e.messages.optJSONObject(e.messages.length()-1);
             if(last!=null){
@@ -238,7 +266,7 @@ public class MainActivity extends Activity {
                 row.addView(text("Resposta automática "+last.optInt("stage")+": "+last.optString("outgoing"),13,GREEN,false));
             }
             row.addView(button("Ver histórico ("+e.messages.length()+")",()->showHistory(e),false));
-            row.addView(button("Abrir WhatsApp",()->openWhatsApp(e.key),false));
+            row.addView(button("Abrir "+WhatsAppApps.label(e.pkg),()->openWhatsApp(e.key,e.pkg),false));
             row.addView(button(e.done?"Reabrir pendência":"Marcar como atendido",()->{
                 Attendance.mark(this,e.key,!e.done);refreshAttendance();
             },!e.done));
@@ -253,11 +281,12 @@ public class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this).setTitle(e.name).setMessage(b.toString()).setPositiveButton("Fechar",null).show();
     }
-    private void openWhatsApp(String key){
-        if(ReplyListener.openConversation(key))return;
-        Intent launch=getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+    private void openWhatsApp(String key,String pkg){
+        if(!WhatsAppApps.supported(pkg))return;
+        if(ReplyListener.openConversation(key,pkg))return;
+        Intent launch=getPackageManager().getLaunchIntentForPackage(pkg);
         if(launch!=null){startActivity(launch);Toast.makeText(this,"Localize o contato no WhatsApp e confirme o retorno aqui.",Toast.LENGTH_LONG).show();}
-        else Toast.makeText(this,"WhatsApp Messenger não encontrado.",Toast.LENGTH_LONG).show();
+        else Toast.makeText(this,WhatsAppApps.label(pkg)+" não encontrado.",Toast.LENGTH_LONG).show();
     }
     private void save(){
         String a=first.getText().toString().trim(), b=second.getText().toString().trim();
