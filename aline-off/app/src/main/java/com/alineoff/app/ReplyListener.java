@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import androidx.core.app.NotificationCompat;
@@ -21,6 +23,69 @@ import java.util.Map;
 public class ReplyListener extends NotificationListenerService {
     private static final Object LOCK=new Object();
     private static volatile boolean connected=false;
+    private static volatile ReplyListener instance;
+    private final Handler handler=new Handler(Looper.getMainLooper());
+    private final ReceptionGate reception=new ReceptionGate();
+    private boolean recoveryEnabled=false;
+    private final Runnable recoveryTick=new Runnable(){
+        @Override public void run(){
+            if(!connected || instance!=ReplyListener.this)return;
+            try{scanMessenger(true);}catch(RuntimeException e){DiagnosticLog.add(ReplyListener.this,"Consulta ativa falhou: "+e.getClass().getSimpleName());}
+            if(connected && instance==ReplyListener.this)handler.postDelayed(this,4000);
+        }
+    };
+    private boolean messengerEnabled(){
+        SharedPreferences p=Store.prefs(this);
+        return p.getBoolean("consent_v2",false)&&p.getBoolean("enabled",false)&&p.getBoolean("app_messenger",true);
+    }
+    private final SharedPreferences.OnSharedPreferenceChangeListener receptionSettings=(p,k)->{
+        if("enabled".equals(k)||"app_messenger".equals(k)||"consent_v2".equals(k)){
+            recoveryEnabled=messengerEnabled();reception.reset(System.currentTimeMillis());
+        }
+    };
+    static boolean inspectMessenger(){
+        ReplyListener r=instance;if(r==null||!connected)return false;
+        r.handler.post(()->r.scanMessenger(false));return true;
+    }
+    private void scanMessenger(boolean recover){
+        if(!connected || instance!=this)return;
+        SharedPreferences p=Store.prefs(this);
+        if(!p.getBoolean("consent_v2",false))return;
+        if(recover && !messengerEnabled())return;
+        long now=System.currentTimeMillis();
+        if(messengerEnabled()!=recoveryEnabled){recoveryEnabled=messengerEnabled();reception.reset(now);}
+        StatusBarNotification[] active=getActiveNotifications();
+        if(active==null){
+            if(!recover)p.edit().putString("health_scan","Android não retornou a lista de notificações.").apply();
+            return;
+        }
+        int messenger=0,business=0,valid=0;
+        for(StatusBarNotification sbn:active){
+            if(sbn==null)continue;
+            String pkg=sbn.getPackageName();
+            if(WhatsAppApps.BUSINESS.equals(pkg)){if(!recover)business++;continue;}
+            if(!WhatsAppApps.MESSENGER.equals(pkg))continue;
+            messenger++;
+            Notification n=sbn.getNotification();
+            if(n==null || (n.flags&Notification.FLAG_GROUP_SUMMARY)!=0 || (n.flags&Notification.FLAG_ONGOING_EVENT)!=0 || n.visibility==Notification.VISIBILITY_SECRET)continue;
+            if(!recover && !ReplyTransport.scan(n,pkg).candidates.isEmpty())valid++;
+            if(recover && recoveryEnabled && reception.recover(sbn.getKey(),sbn.getPostTime(),now)){
+                countEvent(sbn,true);
+                synchronized(LOCK){try{process(sbn);}catch(RuntimeException e){DiagnosticLog.add(this,"Recuperação: "+e.getClass().getSimpleName());}}
+            }
+        }
+        if(!recover){
+            String report="Ativas Messenger: "+messenger+" (com resposta: "+valid+"), Business: "+business;
+            p.edit().putString("health_scan",report).apply();DiagnosticLog.add(this,report);
+        }
+    }
+    private void countEvent(StatusBarNotification sbn,boolean recovered){
+        SharedPreferences p=Store.prefs(this);
+        String pkg=sbn.getPackageName(),suffix=WhatsAppApps.BUSINESS.equals(pkg)?"business":"messenger";
+        p.edit().putLong("health_whatsapp_seen",System.currentTimeMillis()).putInt("health_wa_count",p.getInt("health_wa_count",0)+1).putInt("health_count_"+suffix,p.getInt("health_count_"+suffix,0)+1).apply();
+        if(recovered)p.edit().putInt("health_recovered",p.getInt("health_recovered",0)+1).apply();
+        DiagnosticLog.add(this,WhatsAppApps.label(pkg)+(recovered?": evento recuperado da lista ativa.":": evento recebido."));
+    }
     private static final Map<String,PendingIntent> OPEN_ACTIONS=new LinkedHashMap<String,PendingIntent>(32,0.75f,true){
         @Override protected boolean removeEldestEntry(Map.Entry<String,PendingIntent> e){return size()>100;}
     };
@@ -32,18 +97,21 @@ public class ReplyListener extends NotificationListenerService {
         try{action.send();return true;}catch(PendingIntent.CanceledException | SecurityException e){return false;}
     }
     @Override public void onListenerConnected(){
-        super.onListenerConnected(); connected=true;
+        super.onListenerConnected(); connected=true;instance=this;
+        reception.reset(System.currentTimeMillis());recoveryEnabled=messengerEnabled();
+        Store.prefs(this).registerOnSharedPreferenceChangeListener(receptionSettings);
+        handler.removeCallbacks(recoveryTick);handler.postDelayed(recoveryTick,4000);
         DiagnosticLog.add(this,"Serviço conectado pelo Android.");
         Store.cleanup(this,System.currentTimeMillis());
         Store.status(this,"Leitor conectado. Aguardando uma nova notificação do WhatsApp.");
     }
     @Override public void onListenerDisconnected(){
-        connected=false;super.onListenerDisconnected();
+        connected=false;if(instance==this)instance=null;handler.removeCallbacksAndMessages(null);Store.prefs(this).unregisterOnSharedPreferenceChangeListener(receptionSettings);super.onListenerDisconnected();
         DiagnosticLog.add(this,"Serviço desconectado.");
         Store.status(this,"Leitor desconectado. Verifique o acesso especial e reconecte.");
         if(Store.prefs(this).getBoolean("consent_v2",false))requestRebind(new ComponentName(this,ReplyListener.class));
     }
-    @Override public void onDestroy(){connected=false;super.onDestroy();}
+    @Override public void onDestroy(){if(instance==this){connected=false;instance=null;}handler.removeCallbacksAndMessages(null);Store.prefs(this).unregisterOnSharedPreferenceChangeListener(receptionSettings);super.onDestroy();}
     @Override public void onNotificationPosted(StatusBarNotification sbn){
         if(sbn==null || !connected)return;
         SharedPreferences p=Store.prefs(this);
@@ -64,10 +132,11 @@ public class ReplyListener extends NotificationListenerService {
         }
         String pkg=sbn.getPackageName();
         if(!WhatsAppApps.supported(pkg))return;
+        String rawSuffix=WhatsAppApps.BUSINESS.equals(pkg)?"business":"messenger";
+        p.edit().putInt("health_raw_"+rawSuffix,p.getInt("health_raw_"+rawSuffix,0)+1).apply();
+        if(WhatsAppApps.MESSENGER.equals(pkg))reception.observe(sbn.getKey(),sbn.getPostTime());
         if(!WhatsAppApps.enabled(pkg,p.getBoolean("app_messenger",true),p.getBoolean("app_business",false)))return;
-        String suffix=WhatsAppApps.BUSINESS.equals(pkg)?"business":"messenger";
-        p.edit().putLong("health_whatsapp_seen",System.currentTimeMillis()).putInt("health_wa_count",p.getInt("health_wa_count",0)+1).putInt("health_count_"+suffix,p.getInt("health_count_"+suffix,0)+1).apply();
-        DiagnosticLog.add(this,WhatsAppApps.label(pkg)+": evento recebido.");
+        countEvent(sbn,false);
         synchronized(LOCK){
             try{process(sbn);}catch(RuntimeException e){Store.status(this,"Falha ao processar notificação: "+e.getClass().getSimpleName());}
         }

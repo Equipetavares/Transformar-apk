@@ -8,3 +8,5 @@ Versão 1.4: a permissão opcional POST_NOTIFICATIONS permite gerar um aviso loc
 Versão 1.6: relatório técnico local com até 30 eventos sem nomes ou textos de conversas. O teste completo usa apenas uma notificação do próprio aplicativo e um receptor privado, com um identificador aleatório de uso único. Não envia nada ao WhatsApp durante esse teste. O relatório só é copiado mediante ação do usuário.
 
 Versão 1.7: suporte opcional ao WhatsApp Business mediante confirmação explícita. Cada aplicativo tem controle diário separado e identificação de origem na central; as mesmas mensagens configuradas são compartilhadas. O processamento continua exclusivamente local.
+
+Versão 1.8: consulta da lista de notificações autorizadas do Messenger, como recuperação de eventos recentes não recebidos por callback. A consulta automática ocorre somente com Messenger e automação ativos e serviço conectado; respeita os filtros do Android. O diagnóstico manual mostra apenas contagens das duas versões. Nenhum conteúdo de outros apps é lido ou gravado.

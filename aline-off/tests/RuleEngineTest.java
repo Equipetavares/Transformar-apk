@@ -41,6 +41,16 @@ public class RuleEngineTest {
         eq("business enabled",1,WhatsAppApps.enabled(WhatsAppApps.BUSINESS,true,true)?1:0);
         eq("messenger legacy key preserved",1,WhatsAppApps.contactScope(WhatsAppApps.MESSENGER,"u","id").equals("u|id")?1:0);
         eq("account scopes isolated",0,WhatsAppApps.contactScope(WhatsAppApps.MESSENGER,"u","id").equals(WhatsAppApps.contactScope(WhatsAppApps.BUSINESS,"u","id"))?1:0);
+        ReceptionGate gate=new ReceptionGate();gate.reset(1000);
+        eq("old notification excluded",0,gate.recover("a",999,1100)?1:0);
+        eq("new missed callback recovered",1,gate.recover("a",1100,1200)?1:0);
+        eq("recovery not repeated",0,gate.recover("a",1100,1300)?1:0);
+        gate.observe("b",1200);
+        eq("normal callback not replayed",0,gate.recover("b",1200,1300)?1:0);
+        eq("new version eligible",1,gate.recover("b",1400,1500)?1:0);
+        eq("stale active excluded",0,gate.recover("c",1000,32000)?1:0);
+        gate.reset(2000);
+        eq("after reenabling no replay",0,gate.recover("a",1100,2100)?1:0);
         System.out.println(count+" tests passed");
     }
 }
