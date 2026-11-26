@@ -47,7 +47,7 @@ public class MainActivity extends Activity {
             root.setPadding(dp(20)+insets.getSystemWindowInsetLeft(),dp(20)+insets.getSystemWindowInsetTop(),dp(20)+insets.getSystemWindowInsetRight(),dp(24)+insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         }); scroll.requestApplyInsets();
-        TextView brand=text("ALINE OFF  /  1.5",12,GREEN,true); root.addView(brand);
+        TextView brand=text("ALINE OFF  /  1.6",12,GREEN,true); root.addView(brand);
         ImageView mascot=new ImageView(this); mascot.setImageResource(R.drawable.logo); mascot.setContentDescription("Mascote pitbull do Aline off"); root.addView(mascot,new LinearLayout.LayoutParams(dp(76),dp(76)));
         root.addView(text("Seu WhatsApp,\nsempre atendido.",29,INK,true));
         root.addView(text("Respostas automáticas • WhatsApp Messenger",14,MUTED,false));
@@ -55,8 +55,9 @@ public class MainActivity extends Activity {
         permissionDetails=text("",14,INK,false);setup.addView(permissionDetails);
         setup.addView(button("1. Autorizar leitura de notificações",this::requestNotificationConsent,true));
         setup.addView(button("2. Permitir avisos do Aline off (opcional)",this::requestOwnNotifications,false));
-        setup.addView(button("3. Testar conexão com Android",this::testConnection,false));
+        setup.addView(button("3. Testar envio e recebimento local",this::testConnection,false));
         setup.addView(button("Verificar / reconectar serviço",this::reconnect,false));
+        setup.addView(button("Copiar relatório técnico",this::copyDiagnostic,false));
         setup.addView(button("Salvar e ativar automação",this::activateNow,true));
         setup.addView(text("A leitura de notificações é essencial. Os avisos do Aline off são opcionais e permitem o teste local. Nenhuma permissão de contatos, SMS ou acessibilidade é necessária.",13,MUTED,false));
         LinearLayout attendance=panel(root); attendance.addView(text("Central de Atendimentos",20,INK,true));
@@ -88,6 +89,7 @@ public class MainActivity extends Activity {
         LinearLayout diag=panel(root); diag.addView(text("03   Diagnóstico",18,INK,true));
         diagnostics=text("",14,MUTED,false); diag.addView(diagnostics);
         diag.addView(button("Atualizar status",this::refresh,false));
+        diag.addView(button("Ver eventos técnicos",()->new AlertDialog.Builder(this).setTitle("Últimos eventos (sem textos de conversas)").setMessage(p.getString("health_trace","Nenhum evento registrado.")).setPositiveButton("Fechar",null).show(),false));
         diag.addView(button("Configurações de bateria",()->{try{startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));}catch(Exception e){startActivity(new Intent(Settings.ACTION_SETTINGS));}},false));
         diag.addView(text("Instale pelo canal autorizado do Google Play. Se o Android não conceder acesso, a automação permanece desligada. Teste com outro telefone, saia da conversa no WhatsApp e confirme que uma notificação com botão Responder aparece. O teste local não envia mensagens reais.",13,MUTED,false));
         LinearLayout privacy=panel(root); privacy.addView(text("04   Privacidade e controle",18,INK,true));
@@ -160,6 +162,12 @@ public class MainActivity extends Activity {
             uiHandler.postDelayed(this::refresh,1500);
         }else{refresh();Toast.makeText(this,"Serviço conectado.",Toast.LENGTH_SHORT).show();}
     }
+    private void copyDiagnostic(){
+        String report="Aline off 1.6.0 | Android "+Build.VERSION.RELEASE+" | API "+Build.VERSION.SDK_INT+" | "+Build.MANUFACTURER+" "+Build.MODEL+"\n"+permissionDetails.getText()+"\n"+diagnostics.getText()+"\n"+p.getString("health_trace","");
+        android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+        if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText("Diagnóstico Aline off",report));
+        Toast.makeText(this,"Relatório copiado. Não contém mensagens ou nomes dos contatos.",Toast.LENGTH_LONG).show();
+    }
     private void testConnection(){
         if(!p.getBoolean("consent_v2",false) || !hasAccess()){requestNotificationConsent();return;}
         if(!ReplyListener.isConnected()){reconnect();Toast.makeText(this,"Serviço ainda não conectado. Verifique o status e teste novamente.",Toast.LENGTH_LONG).show();return;}
@@ -168,9 +176,20 @@ public class MainActivity extends Activity {
         if(nm==null)return;
         if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(new NotificationChannel("aline_diagnostic","Teste de conexão",NotificationManager.IMPORTANCE_DEFAULT));
         long now=System.currentTimeMillis();
-        p.edit().putLong("health_test_requested",now).putLong("health_test_seen",0).commit();
+        String token=java.util.UUID.randomUUID().toString();
+        p.edit().putLong("health_test_requested",now).putLong("health_test_seen",0).putLong("health_probe_verified",0).putString("health_probe_token",token).putString("health_probe_transport","").putString("health_probe_error","").commit();
         Notification.Builder b=Build.VERSION.SDK_INT>=26?new Notification.Builder(this,"aline_diagnostic"):new Notification.Builder(this);
-        try{nm.notify("aline-local-test",1401,b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle("Aline off: teste de conexão").setContentText("Notificação local de diagnóstico, sem enviar mensagem ao WhatsApp.").setAutoCancel(true).build());}
+        try{
+            Intent target=new Intent(this,LocalReplyTestReceiver.class).setAction("com.alineoff.app.LOCAL_REPLY_TEST").putExtra("probe_token",token);
+            int flags=android.app.PendingIntent.FLAG_CANCEL_CURRENT;
+            if(Build.VERSION.SDK_INT>=31)flags|=android.app.PendingIntent.FLAG_MUTABLE;
+            android.app.PendingIntent pi=android.app.PendingIntent.getBroadcast(this,1401,target,flags);
+            android.app.RemoteInput input=new android.app.RemoteInput.Builder("aline_probe_reply").setLabel("Teste local").build();
+            Notification.Action.Builder action=new Notification.Action.Builder(android.R.drawable.ic_menu_send,"Responder",pi).addRemoteInput(input);
+            if(Build.VERSION.SDK_INT>=28)action.setSemanticAction(Notification.Action.SEMANTIC_ACTION_REPLY);
+            Bundle extra=new Bundle();extra.putString("aline_probe_token",token);
+            nm.notify("aline-local-test",1401,b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle("Aline off: teste completo").setContentText("Teste local de envio e recepção, sem mensagem real no WhatsApp.").setCategory(Notification.CATEGORY_MESSAGE).addExtras(extra).addAction(action.build()).setAutoCancel(true).build());
+        }
         catch(SecurityException ex){Store.status(this,"O Android não autorizou a notificação de teste.");}
         refresh();uiHandler.postDelayed(this::refresh,6500);
     }
@@ -191,10 +210,11 @@ public class MainActivity extends Activity {
         if(permissionDetails!=null){
             boolean consent=p.getBoolean("consent_v2",false), granted=hasAccess(), connected=ReplyListener.isConnected();
             long requested=p.getLong("health_test_requested",0), seen=p.getLong("health_test_seen",0), wa=p.getLong("health_whatsapp_seen",0);
-            String test=requested==0?"Não realizado":seen>=requested?"Recebido com sucesso":System.currentTimeMillis()-requested<6500?"Aguardando notificação":"Não recebido; confira o canal de teste e a conexão";
+            long verified=p.getLong("health_probe_verified",0);
+            String test=requested==0?"Não realizado":verified>=requested?"APROVADO: texto recebido":seen>=requested?"Leitura OK; envio: "+p.getString("health_probe_transport","aguardando")+" "+p.getString("health_probe_error",""):System.currentTimeMillis()-requested<6500?"Aguardando notificação":"Não recebido pelo leitor";
             permissionDetails.setText("Consentimento: "+(consent?"concedido":"pendente")+"\nLeitura de notificações: "+(granted?"autorizada":"NÃO AUTORIZADA")+"\nServiço do Android: "+(granted&&connected?"conectado":"desconectado")+"\nAvisos próprios (opcional): "+(ownNotifications()?"permitidos":"bloqueados")+"\nWhatsApp Messenger: "+(getPackageManager().getLaunchIntentForPackage("com.whatsapp")!=null?"encontrado":"não encontrado")+"\nTeste local: "+test+"\nÚltimo evento WhatsApp: "+(wa>0?DateFormat.getDateTimeInstance().format(new Date(wa)):"nenhum desde a instalação"));
         }
-        if(permissionDetails!=null){long sent=p.getLong("health_last_dispatch",0);permissionDetails.append("\nÚltima ação encaminhada: "+(sent>0?DateFormat.getDateTimeInstance().format(new Date(sent)):"nenhuma")+"\nÚltimo filtro: "+p.getString("health_last_skip","nenhum"));}
+        if(permissionDetails!=null){long sent=p.getLong("health_last_dispatch",0);permissionDetails.append("\nEventos do WhatsApp: "+p.getInt("health_wa_count",0)+"\nÚltima ação encaminhada: "+(sent>0?DateFormat.getDateTimeInstance().format(new Date(sent)):"nenhuma")+"\nÚltimo filtro: "+p.getString("health_last_skip","nenhum"));}
         status.setText(hasAccess()?"✓ Permissão concedida":"○ Permissão pendente"); status.setTextColor(hasAccess()?GREEN:MUTED);
         long at=p.getLong("last_status_at",0);
         diagnostics.setText((p.getBoolean("enabled",false)?"Automação ligada":"Automação desligada")+"\n"+p.getString("last_status","Nenhum evento registrado.")+(at>0?"\n"+DateFormat.getDateTimeInstance().format(new Date(at)):""));

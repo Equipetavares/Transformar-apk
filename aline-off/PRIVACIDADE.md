@@ -4,3 +4,5 @@ O aplicativo responde automaticamente às conversas individuais do WhatsApp Mess
 A central de atendimentos armazena localmente o nome exibido, trechos recebidos e respostas automáticas encaminhadas (até 1500 caracteres por texto e 20 registros por conversa). Pendências ficam até conclusão ou exclusão. Registros concluídos expiram após sete dias nas rotinas de limpeza. Não se confirma leitura, entrega ou resposta humana automaticamente; o usuário marca o retorno. A revogação no app apaga também a central.
 
 Versão 1.4: a permissão opcional POST_NOTIFICATIONS permite gerar um aviso local de teste. O diagnóstico registra somente horários do teste e do último evento WhatsApp, sem conteúdo adicional. O acesso especial de leitura continua exigindo autorização pelo sistema.
+
+Versão 1.6: relatório técnico local com até 30 eventos sem nomes ou textos de conversas. O teste completo usa apenas uma notificação do próprio aplicativo e um receptor privado, com um identificador aleatório de uso único. Não envia nada ao WhatsApp durante esse teste. O relatório só é copiado mediante ação do usuário.

@@ -5,8 +5,11 @@
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <receiver android:name=".LocalReplyTestReceiver" android:exported="false"/>
         <service android:name=".ReplyListener" android:label="Aline off — respostas automáticas" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
+            <meta-data android:name="android.service.notification.default_filter_types" android:value="conversations|alerting|silent"/>
+            <meta-data android:name="android.service.notification.disabled_filter_types" android:value="ongoing"/>
         </service>
     </application>
 </manifest>
