@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <queries><package android:name="com.whatsapp"/></queries>
     <application android:label="Aline off" android:icon="@drawable/logo" android:allowBackup="false" android:usesCleartextTraffic="false" android:roundIcon="@drawable/logo" android:theme="@style/AppTheme" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">

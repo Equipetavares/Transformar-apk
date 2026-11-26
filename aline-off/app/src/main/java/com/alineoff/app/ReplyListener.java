@@ -35,8 +35,10 @@ public class ReplyListener extends NotificationListenerService {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final DelayQueue queue=new DelayQueue();
     private long connectedAt=0;
+    private static volatile boolean connected=false;
+    static boolean isConnected(){return connected;}
     private void cancelPending(){queue.clear();handler.removeCallbacksAndMessages(null);}
-    @Override public void onDestroy(){synchronized(LOCK){connectedAt=0;cancelPending();}super.onDestroy();}
+    @Override public void onDestroy(){synchronized(LOCK){connected=false;connectedAt=0;cancelPending();}super.onDestroy();}
     @Override public void onNotificationRemoved(StatusBarNotification sbn){
         if(sbn!=null && WHATSAPP.equals(sbn.getPackageName()))synchronized(LOCK){queue.cancelNotification(sbn.getKey());}
     }
@@ -56,15 +58,25 @@ public class ReplyListener extends NotificationListenerService {
         }
     }
     @Override public void onListenerConnected() {
-        super.onListenerConnected(); synchronized(LOCK){cancelPending();connectedAt=System.currentTimeMillis();}
+        super.onListenerConnected(); synchronized(LOCK){cancelPending();connectedAt=System.currentTimeMillis();connected=true;}
         Store.cleanup(this,connectedAt); Store.status(this,"Acesso conectado. Aguardando novas mensagens.");
     }
     @Override public void onListenerDisconnected() {
-        super.onListenerDisconnected(); synchronized(LOCK){connectedAt=0;cancelPending();} Store.status(this,"Acesso desconectado. Confira as permissões.");
-        requestRebind(new ComponentName(this,ReplyListener.class));
+        super.onListenerDisconnected(); synchronized(LOCK){connected=false;connectedAt=0;cancelPending();} Store.status(this,"Acesso desconectado. Confira as permissões.");
+        if(Store.prefs(this).getBoolean("consent_v2",false)) requestRebind(new ComponentName(this,ReplyListener.class));
     }
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
-        if(sbn==null || !WHATSAPP.equals(sbn.getPackageName())) return;
+        if(sbn==null)return;
+        if(getPackageName().equals(sbn.getPackageName()) && sbn.getId()==1401 && "aline-local-test".equals(sbn.getTag())){
+            SharedPreferences p=Store.prefs(this);
+            if(p.getBoolean("consent_v2",false) && connected && p.getLong("health_test_requested",0)>0){
+                p.edit().putLong("health_test_seen",System.currentTimeMillis()).apply();
+                Store.status(this,"Teste local recebido: o leitor de notificações está funcionando.");
+            }
+            return;
+        }
+        if(!WHATSAPP.equals(sbn.getPackageName()))return;
+        if(Store.prefs(this).getBoolean("consent_v2",false))Store.prefs(this).edit().putLong("health_whatsapp_seen",System.currentTimeMillis()).apply();
         synchronized(LOCK) {
             try { process(sbn,null); } catch(RuntimeException e) { Store.status(this,"Notificação ignorada por incompatibilidade: "+e.getClass().getSimpleName()); }
         }
@@ -72,15 +84,16 @@ public class ReplyListener extends NotificationListenerService {
     private static String str(CharSequence s) { return s==null?"":s.toString().trim(); }
     private void process(StatusBarNotification sbn,DelayQueue.Ticket dispatch) {
         SharedPreferences p=Store.prefs(this);
-        if(!p.getBoolean("consent_v2",false) || !p.getBoolean("enabled",false) || connectedAt==0) return;
+        if(!p.getBoolean("consent_v2",false) || connectedAt==0)return;
+        if(!p.getBoolean("enabled",false)){Store.status(this,"Notificação WhatsApp recebida; automação desligada.");return;}
         long now=System.currentTimeMillis();
-        if(sbn.getPostTime()<connectedAt || now-sbn.getPostTime()>120000L) return;
+        if(sbn.getPostTime()<connectedAt || now-sbn.getPostTime()>120000L){Store.status(this,"Notificação anterior à conexão ou antiga; aguardando mensagem nova.");return;}
         Notification n=sbn.getNotification();
         if(n==null || n.extras==null || (n.flags&Notification.FLAG_GROUP_SUMMARY)!=0 || (n.flags&Notification.FLAG_ONGOING_EVENT)!=0) return;
         Bundle x=n.extras;
         if(n.visibility==Notification.VISIBILITY_SECRET || Notification.CATEGORY_CALL.equals(n.category)) return;
         Store.cleanup(this,now);
-        if(x.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION,false) || (!x.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION) && !str(x.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)).isEmpty())) return;
+        if(x.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION,false) || (!x.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION) && !str(x.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)).isEmpty())){Store.status(this,"Grupo ou conversa não individual identificada; nenhuma resposta.");return;}
         String first=p.getString("first",Store.DEFAULT_FIRST), second=p.getString("second",Store.DEFAULT_SECOND);
         String title=str(x.getCharSequence(Notification.EXTRA_TITLE));
         String body=str(x.getCharSequence(Notification.EXTRA_TEXT));
@@ -121,7 +134,7 @@ public class ReplyListener extends NotificationListenerService {
         }
         RuleEngine.State previous=Store.read(this,key);
         int stage=RuleEngine.decide(previous,Store.day(now),event,timestamp,now,true,p.getBoolean("second_enabled",true),!first.trim().isEmpty(),!second.trim().isEmpty());
-        if(stage==RuleEngine.NONE) return;
+        if(stage==RuleEngine.NONE){if(dispatch!=null)Store.status(this,"Resposta cancelada: regra diária, duplicidade ou mensagem antiga.");return;}
         Notification.Action action=findReply(n);
         if(action==null) { Store.status(this,"WhatsApp não disponibilizou a ação de resposta rápida."); return; }
         if(dispatch==null){
@@ -133,7 +146,7 @@ public class ReplyListener extends NotificationListenerService {
             return;
         }
         RemoteInput input=null; for(RemoteInput r:action.getRemoteInputs()) if(r.getAllowFreeFormInput()){input=r;break;}
-        if(input==null) return;
+        if(input==null){Store.status(this,"Ação do WhatsApp sem campo de resposta de texto.");return;}
         String reply=stage==RuleEngine.FIRST?first:second;
         Intent fill=new Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         Bundle data=new Bundle(); data.putCharSequence(input.getResultKey(),reply);
