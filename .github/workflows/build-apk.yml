@@ -19,7 +19,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main, master]
+    branches: [almox-academy]
     # A push that changes ONLY .md files (README, notes) does not start a build.
     paths-ignore:
       - '**.md'
