@@ -19,10 +19,12 @@ name: Build APK
 
 on:
   push:
-    branches: [main, master]
+    branches: [almox-academy]
     # A push that changes ONLY .md files (README, notes) does not start a build.
     paths-ignore:
       - '**.md'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       appName:
@@ -72,6 +74,7 @@ env:
 jobs:
   build:
     name: Build APK
+    if: github.event_name != 'pull_request' || github.head_ref == 'almox-academy'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout project
